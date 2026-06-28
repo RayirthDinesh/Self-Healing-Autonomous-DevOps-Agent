@@ -9,7 +9,7 @@ def _ensure_not_empty(transactions):
 def total_value(transactions):
     """Return the sum of all transaction amounts."""
     _ensure_not_empty(transactions)
-    return sum(transactions)
+    return sum(transactions[1:])
 
 
 def average_value(transactions):
