@@ -44,35 +44,49 @@ jobs:
       # 5/6. Always notify the webhook server — on failure so the agent can act,
       #      and on success so it knows a previous fix worked. job.status is
       #      "success" only if every step above passed; otherwise "failure".
+      #
+      #      Values are passed in via env (not inline ${{ }}) so quotes/newlines
+      #      in them can't break the shell. The JSON body is built with python3
+      #      (always present on the runner, stdlib only) which escapes the logs
+      #      safely, written to a file, then POSTed with curl -d @file.
       - name: Notify webhook
         if: always()
         shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
         run: |
-          if [ "${{ job.status }}" = "success" ]; then
-            STATUS="success"
-          else
-            STATUS="failure"
-          fi
+          if [ "$JOB_STATUS" = "success" ]; then STATUS="success"; else STATUS="failure"; fi
 
-          # Grab whatever was logged from install + tests. Fallback text avoids
-          # sending an empty body if the log file never got created.
-          LOGS=$(cat run.log 2>/dev/null || echo "no logs were captured")
+          # Build the payload with python's json module so the full pytest
+          # output (newlines, quotes, tracebacks) is escaped correctly.
+          STATUS="$STATUS" python3 - > payload.json <<'PY'
+          import json, os
+          try:
+              logs = open("run.log").read()
+          except FileNotFoundError:
+              logs = "no logs were captured"
+          print(json.dumps({
+              "repo": os.environ["REPO"],
+              "branch": os.environ["BRANCH"],
+              "commit_sha": os.environ["COMMIT_SHA"],
+              "workflow_run_id": os.environ["RUN_ID"],
+              "test_logs": logs,
+              "status": os.environ["STATUS"],
+          }))
+          PY
 
-          # Build the JSON body with jq so the logs are safely escaped
-          # (newlines, quotes, tracebacks) instead of breaking the payload.
-          PAYLOAD=$(jq -n \
-            --arg repo "${{ github.repository }}" \
-            --arg branch "${{ github.ref_name }}" \
-            --arg commit_sha "${{ github.sha }}" \
-            --arg workflow_run_id "${{ github.run_id }}" \
-            --arg test_logs "$LOGS" \
-            --arg status "$STATUS" \
-            '{repo: $repo, branch: $branch, commit_sha: $commit_sha, workflow_run_id: $workflow_run_id, test_logs: $test_logs, status: $status}')
+          echo "Payload bytes: $(wc -c < payload.json)"  # debug: must be > 0
 
-          # WEBHOOK_URL points at the EC2 server; kept in a secret so the IP
-          # isn't committed. WEBHOOK_SECRET must match the server's so the
+          # WEBHOOK_URL points at the server; kept in a secret so the IP isn't
+          # committed. WEBHOOK_SECRET must match the server's .env so the
           # X-Webhook-Secret header passes its 401 check.
-          curl -sS -X POST "${{ secrets.WEBHOOK_URL }}" \
+          curl -sS -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -H "X-Webhook-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
-            -d "$PAYLOAD"
+            -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+            -d @payload.json
