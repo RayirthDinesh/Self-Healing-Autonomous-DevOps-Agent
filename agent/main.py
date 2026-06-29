@@ -97,6 +97,10 @@ def webhook(payload: WebhookPayload):
 
 if __name__ == "__main__":
     # Bind to all interfaces so it's reachable on the EC2 box, port 8000.
+    # http="httptools" (from uvicorn[standard]) instead of the default h11
+    # parser: h11 mishandles "Expect: 100-continue" from clients like curl
+    # over real network latency, dropping the request body. httptools handles
+    # it correctly.
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, http="httptools")
