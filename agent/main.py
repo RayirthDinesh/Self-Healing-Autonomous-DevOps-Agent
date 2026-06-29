@@ -1,9 +1,8 @@
 """FastAPI webhook server for the Self-Healing SRE Agent.
 
 GitHub Actions calls this server after every CI run on a watched branch.
-On a "failure" payload this is where the agent pipeline would kick off
-(diagnose -> write fix -> test in sandbox -> open PR). For now it validates
-the request, authenticates it, and logs it cleanly.
+On failure: validates the request, then kicks off the agent pipeline in the
+background (diagnose -> fix -> validate -> open PR).
 
 Run locally:   python main.py
 Health check:  curl http://localhost:8000/health
@@ -13,9 +12,10 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 
 from models import WebhookPayload
+from pipeline import run as run_pipeline
 
 # --- Configuration -------------------------------------------------------
 
@@ -63,15 +63,13 @@ def health():
 
 
 @app.post("/webhook")
-def webhook(payload: WebhookPayload):
+def webhook(payload: WebhookPayload, background_tasks: BackgroundTasks):
     """Receive a CI result from GitHub Actions.
 
-    FastAPI has already validated the body against WebhookPayload by the time
-    we get here. We log the run, then branch on status:
-      - failure -> this is where the agent would be triggered
-      - success -> nothing to do, a fix (or clean run) succeeded
+    FastAPI validates the body against WebhookPayload before this runs.
+    We respond immediately (so GitHub doesn't time out), then run the
+    full agent pipeline in the background.
     """
-    # One concise INFO line per request: timestamp comes from the log format.
     logger.info(
         "Incoming run | branch=%s commit=%s status=%s",
         payload.branch,
@@ -80,17 +78,19 @@ def webhook(payload: WebhookPayload):
     )
 
     if payload.status == "failure":
-        # Full, readable dump of the failed run for the agent / portfolio demo.
-        logger.info("=== CI FAILURE ===")
-        logger.info("repo:            %s", payload.repo)
-        logger.info("branch:          %s", payload.branch)
-        logger.info("commit_sha:      %s", payload.commit_sha)
-        logger.info("workflow_run_id: %s", payload.workflow_run_id)
-        logger.info("test_logs:\n%s", payload.test_logs)
-        logger.info("==================")
-        return {"received": True, "action": "triggering agent"}
+        logger.info("CI failure on %s — starting agent pipeline", payload.branch)
+        # BackgroundTasks: FastAPI sends the HTTP response right now, then
+        # runs this function after. The pipeline can take 60-90 seconds;
+        # without this, GitHub would time out waiting for a response.
+        background_tasks.add_task(
+            run_pipeline,
+            repo=payload.repo,
+            branch=payload.branch,
+            commit_sha=payload.commit_sha,
+            test_logs=payload.test_logs,
+        )
+        return {"received": True, "action": "agent pipeline started"}
 
-    # Any non-failure status (expected: "success").
     logger.info("CI success on %s (%s) — no action needed", payload.branch, payload.commit_sha)
     return {"received": True, "action": "no action needed"}
 
