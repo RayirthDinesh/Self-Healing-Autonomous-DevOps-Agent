@@ -1,24 +1,78 @@
 name: CI
 
+# Trigger only on pushes to main and to any bug/* branch.
+# The bug/* branches are the ones the Self-Healing SRE Agent watches: a push
+# there runs the suite, and on failure the agent gets notified to diagnose/fix.
 on:
   push:
     branches:
-      - "**"
+      - main
+      - "bug/*"
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # 1. Pull the repo contents into the runner.
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 2. Install the Python interpreter the pipeline runs on.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 3. Install project dependencies. This can fail by itself (e.g. an
+      #    incompatible pinned version) — that's a legitimate pipeline failure
+      #    and is captured in run.log below so the agent can diagnose it.
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        shell: bash
+        run: |
+          set -o pipefail
+          pip install -r requirements.txt 2>&1 | tee -a run.log
 
+      # 4. Run the test suite. -v --tb=long keeps the output verbose enough for
+      #    an LLM to read the failing assertion and full traceback. pipefail
+      #    makes the step (and job) fail if pytest fails, even through tee.
       - name: Run tests
-        run: pytest -v --tb=long
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -v --tb=long 2>&1 | tee -a run.log
+
+      # 5/6. Always notify the webhook server — on failure so the agent can act,
+      #      and on success so it knows a previous fix worked. job.status is
+      #      "success" only if every step above passed; otherwise "failure".
+      - name: Notify webhook
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            STATUS="success"
+          else
+            STATUS="failure"
+          fi
+
+          # Grab whatever was logged from install + tests. Fallback text avoids
+          # sending an empty body if the log file never got created.
+          LOGS=$(cat run.log 2>/dev/null || echo "no logs were captured")
+
+          # Build the JSON body with jq so the logs are safely escaped
+          # (newlines, quotes, tracebacks) instead of breaking the payload.
+          PAYLOAD=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg commit_sha "${{ github.sha }}" \
+            --arg workflow_run_id "${{ github.run_id }}" \
+            --arg test_logs "$LOGS" \
+            --arg status "$STATUS" \
+            '{repo: $repo, branch: $branch, commit_sha: $commit_sha, workflow_run_id: $workflow_run_id, test_logs: $test_logs, status: $status}')
+
+          # WEBHOOK_URL points at the EC2 server; kept in a secret so the IP
+          # isn't committed. WEBHOOK_SECRET must match the server's so the
+          # X-Webhook-Secret header passes its 401 check.
+          curl -sS -X POST "${{ secrets.WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -H "X-Webhook-Secret: ${{ secrets.WEBHOOK_SECRET }}" \
+            -d "$PAYLOAD"
