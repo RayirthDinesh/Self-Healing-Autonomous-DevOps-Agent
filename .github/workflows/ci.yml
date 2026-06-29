@@ -86,7 +86,11 @@ jobs:
           # WEBHOOK_URL points at the server; kept in a secret so the IP isn't
           # committed. WEBHOOK_SECRET must match the server's .env so the
           # X-Webhook-Secret header passes its 401 check.
+          # -H "Expect:" disables curl's automatic "Expect: 100-continue"
+          # header (added for bodies > 1KB), which uvicorn/h11 mishandles —
+          # without this the server receives an empty body and returns 422.
           curl -sS -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+            -H "Expect:" \
             -d @payload.json
