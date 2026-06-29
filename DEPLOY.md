@@ -167,8 +167,13 @@ works fine from localhost because there's no latency to expose the race.
 
 Fix is server-side and client-agnostic: use the **httptools** parser.
 `agent/requirements.txt` pins `uvicorn[standard]` (bundles httptools) and
-`main.py` runs `uvicorn.run(..., http="httptools")`. The workflow also sends
-`-H "Expect:"` as defense in depth.
+`main.py` runs `uvicorn.run(..., http="httptools")`. httptools handles the
+`Expect: 100-continue` handshake correctly, so no client-side change is needed.
+
+> Do **not** try to "fix" this with `curl -H "Expect:"` — curl emits that as an
+> empty-value `Expect:` header, which httptools rejects as malformed HTTP
+> ("Invalid HTTP request received", no access-log line). httptools alone is the
+> fix; the workflow's curl sends no Expect override.
 
 Verify over WAN (not localhost) with a large body:
 ```bash
