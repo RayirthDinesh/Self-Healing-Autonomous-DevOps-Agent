@@ -1,5 +1,3 @@
-"""CSV ingestion for the transaction pipeline."""
-
 import os
 
 import pandas as pd
@@ -21,5 +19,5 @@ def parse_transactions(filepath):
         raise FileNotFoundError(f"Transactions file not found: {filepath}")
 
     df = pd.read_csv(filepath)
-    amounts = [float(amount) for amount in df["amount"]]
+    amounts = [float(amount) for amount in df["amount"] if pd.notna(amount)]
     return amounts
