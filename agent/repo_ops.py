@@ -57,14 +57,14 @@ def run_tests(repo_path: str) -> tuple:
     """Install dependencies then run pytest. Returns (passed: bool, output: str)."""
     # Re-install deps first — the fix might have changed requirements.txt
     pip = subprocess.run(
-        ["pip", "install", "-r", "requirements.txt"],
+        ["pip3", "install", "-r", "requirements.txt"],
         cwd=repo_path,
         capture_output=True,
         text=True,
     )
 
     pytest_result = subprocess.run(
-        ["python", "-m", "pytest", "-v", "--tb=long"],
+        ["python3", "-m", "pytest", "-v", "--tb=long"],
         cwd=repo_path,
         capture_output=True,
         text=True,

@@ -12,6 +12,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
+load_dotenv()
 from fastapi import BackgroundTasks, FastAPI, Request
 
 from models import WebhookPayload
@@ -21,7 +22,7 @@ from pipeline import run as run_pipeline
 
 # Load WEBHOOK_SECRET (and anything else) from a .env file sitting next to
 # this script, so secrets are never hardcoded or committed.
-load_dotenv()
+
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
 # --- Logging -------------------------------------------------------------
