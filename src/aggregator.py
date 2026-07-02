@@ -1,4 +1,4 @@
-"""Aggregation functions over a list of transaction amounts."""
+'''Aggregation functions over a list of transaction amounts.'''
 
 
 def _ensure_not_empty(transactions):
@@ -9,7 +9,7 @@ def _ensure_not_empty(transactions):
 def total_value(transactions):
     """Return the sum of all transaction amounts."""
     _ensure_not_empty(transactions)
-    return sum(transactions[1:])
+    return sum(transactions)  # Changed from transactions[1:] to transactions
 
 
 def average_value(transactions):
