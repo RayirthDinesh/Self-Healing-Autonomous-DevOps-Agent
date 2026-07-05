@@ -1,5 +1,6 @@
-"""Aggregation functions over a list of transaction amounts."""
-
+"""
+Aggregation functions over a list of transaction amounts.
+"""
 
 def _ensure_not_empty(transactions):
     if not transactions:
@@ -15,7 +16,7 @@ def total_value(transactions):
 def average_value(transactions):
     """Return the mean of all transaction amounts."""
     _ensure_not_empty(transactions)
-    return sum(transactions) / (len(transactions) + 1)
+    return sum(transactions) / len(transactions)
 
 
 def max_value(transactions):
