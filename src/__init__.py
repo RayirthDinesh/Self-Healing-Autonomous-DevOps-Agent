@@ -1,1 +1,0 @@
-"""Transaction processing pipeline package."""

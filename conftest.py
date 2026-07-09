@@ -1,5 +1,0 @@
-import os
-import sys
-
-# Ensure the repository root is importable so ``import src`` works under pytest.
-sys.path.insert(0, os.path.dirname(__file__))
