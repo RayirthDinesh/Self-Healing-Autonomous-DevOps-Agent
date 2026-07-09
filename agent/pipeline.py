@@ -2,15 +2,25 @@
 
 import logging
 import os
+import shutil
 import tempfile
 
 from github_ops import create_pull_request
 from llm_client import call_llm
+from repo_map import get_repo_map
 from repo_ops import apply_fixes, clone_branch, commit_and_push, read_source_files, run_tests
+from retrieval import select_context
 
 logger = logging.getLogger("sre-agent-webhook")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+
+def _reset_workdir(workdir: str):
+    """Empty the workdir so the branch can be re-cloned pristine."""
+    for entry in os.listdir(workdir):
+        path = os.path.join(workdir, entry)
+        shutil.rmtree(path, ignore_errors=True) if os.path.isdir(path) else os.remove(path)
 
 
 def run(repo: str, branch: str, commit_sha: str, test_logs: str):
@@ -35,29 +45,51 @@ def run(repo: str, branch: str, commit_sha: str, test_logs: str):
             logger.error("Clone failed: %s", e)
             return
 
-        # ── Step 2: Read source files ────────────────────────────────────
-        source_files = read_source_files(workdir)
-        logger.info("Read %d source files from clone", len(source_files))
-
-        # ── Step 3: Call LLM ─────────────────────────────────────────────
+        # ── Step 2: Repo map (cached per commit) + tiered retrieval ──────
         try:
-            result = call_llm(test_logs, source_files)
+            repo_map = get_repo_map(repo, commit_sha, workdir)
+            context = select_context(test_logs, repo_map, workdir)
         except Exception as e:
-            logger.error("LLM call failed: %s", e)
-            return
+            # Retrieval must never kill a run — fall back to the full repo
+            logger.error("Retrieval failed (%s) — falling back to full repo", e)
+            context = read_source_files(workdir)
 
-        diagnosis = result.get("diagnosis", "unknown")
-        fixes = result.get("fixes", [])
-        logger.info("Diagnosis: %s", diagnosis)
-        logger.info("Files to fix: %s", [f["filename"] for f in fixes])
+        # ── Step 3+4: Diagnose, apply, validate — escalate once ──────────
+        # Attempt 1 = tiered context. If the fix doesn't turn the suite
+        # green, attempt 2 retries with the full repo (legacy behavior).
+        diagnosis, passed = None, False
+        for attempt in (1, 2):
+            if attempt == 2:
+                if isinstance(context, dict):
+                    break  # attempt 1 was already full-repo
+                logger.warning("Tiered-context fix failed — escalating to full repo")
+                _reset_workdir(workdir)
+                try:
+                    clone_branch(repo, branch, workdir)
+                except Exception as e:
+                    logger.error("Re-clone for escalation failed: %s", e)
+                    return
+                context = read_source_files(workdir)
 
-        if not fixes:
-            logger.warning("LLM returned no fixes — cannot proceed")
-            return
+            try:
+                result = call_llm(test_logs, context)
+            except Exception as e:
+                logger.error("LLM call failed: %s", e)
+                return
 
-        # ── Step 4: Apply fix and validate ───────────────────────────────
-        apply_fixes(workdir, fixes)
-        passed, test_output = run_tests(workdir)
+            diagnosis = result.get("diagnosis", "unknown")
+            fixes = result.get("fixes", [])
+            logger.info("Attempt %d | Diagnosis: %s", attempt, diagnosis)
+            logger.info("Files to fix: %s", [f["filename"] for f in fixes])
+
+            if not fixes:
+                logger.warning("LLM returned no fixes — cannot proceed")
+                return
+
+            apply_fixes(workdir, fixes)
+            passed, test_output = run_tests(workdir)
+            if passed:
+                break
 
         if not passed:
             logger.error("Fix did not resolve the failure — not pushing")
