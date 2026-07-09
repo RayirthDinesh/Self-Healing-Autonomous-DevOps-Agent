@@ -54,21 +54,41 @@ def apply_fixes(repo_path: str, fixes: list):
 
 
 def run_tests(repo_path: str) -> tuple:
-    """Install dependencies then run pytest. Returns (passed: bool, output: str)."""
-    # Re-install deps first — the fix might have changed requirements.txt
-    pip = subprocess.run(
-        ["pip3", "install", "-r", "requirements.txt"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
+    """Install dependencies and run pytest in a throwaway venv.
 
-    pytest_result = subprocess.run(
-        ["python3", "-m", "pytest", "-v", "--tb=long"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-    )
+    The venv lives outside the clone (so `git add -A` never picks it up) and
+    is deleted afterwards: a repo pinning a broken dependency (e.g.
+    pandas==0.24.0) can never poison the agent's own environment or leak
+    into the next run.
+
+    Returns (passed: bool, output: str).
+    """
+    import shutil
+    import sys
+    import tempfile
+
+    venv_dir = tempfile.mkdtemp(prefix="sre-run-")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "venv", venv_dir],
+            check=True, capture_output=True, text=True,
+        )
+        bin_dir = "Scripts" if os.name == "nt" else "bin"
+        vpython = os.path.join(venv_dir, bin_dir, "python")
+
+        pip_cmd = [vpython, "-m", "pip", "install", "--quiet", "pytest"]
+        if os.path.exists(os.path.join(repo_path, "requirements.txt")):
+            pip_cmd += ["-r", "requirements.txt"]
+        pip = subprocess.run(pip_cmd, cwd=repo_path, capture_output=True, text=True)
+
+        pytest_result = subprocess.run(
+            [vpython, "-m", "pytest", "-v", "--tb=long"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        shutil.rmtree(venv_dir, ignore_errors=True)
 
     output = pip.stdout + pip.stderr + "\n" + pytest_result.stdout + pytest_result.stderr
     passed = pytest_result.returncode == 0
