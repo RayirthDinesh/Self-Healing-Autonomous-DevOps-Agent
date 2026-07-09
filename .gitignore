@@ -7,3 +7,4 @@ venv/
 .claude/
 .env
 agent/.env
+*.key
