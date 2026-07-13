@@ -65,6 +65,7 @@ def run_tests(repo_path: str) -> tuple:
     result = subprocess.run(
         [
             "docker", "run", "--rm",
+            "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", f"{repo_path}:/app",
             "-w", "/app",
             "python:3.11-slim",
