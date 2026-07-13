@@ -54,49 +54,34 @@ def apply_fixes(repo_path: str, fixes: list):
 
 
 def run_tests(repo_path: str) -> tuple:
-    """Install dependencies and run pytest in a throwaway venv.
+    """Run pytest inside a throwaway Docker container.
 
-    The venv lives outside the clone (so `git add -A` never picks it up) and
-    is deleted afterwards: a repo pinning a broken dependency (e.g.
-    pandas==0.24.0) can never poison the agent's own environment or leak
-    into the next run.
+    The container gets the cloned repo mounted in, installs dependencies,
+    runs the suite, then is automatically deleted (--rm). Nothing the fix
+    does can touch the VM or bleed into the next run.
 
     Returns (passed: bool, output: str).
     """
-    import shutil
-    import sys
-    import tempfile
-
-    venv_dir = tempfile.mkdtemp(prefix="sre-run-")
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "venv", venv_dir],
-            check=True, capture_output=True, text=True,
-        )
-        bin_dir = "Scripts" if os.name == "nt" else "bin"
-        vpython = os.path.join(venv_dir, bin_dir, "python")
-
-        pip_cmd = [vpython, "-m", "pip", "install", "--quiet", "pytest"]
-        if os.path.exists(os.path.join(repo_path, "requirements.txt")):
-            pip_cmd += ["-r", "requirements.txt"]
-        pip = subprocess.run(pip_cmd, cwd=repo_path, capture_output=True, text=True)
-
-        pytest_result = subprocess.run(
-            [vpython, "-m", "pytest", "-v", "--tb=long"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        shutil.rmtree(venv_dir, ignore_errors=True)
-
-    output = pip.stdout + pip.stderr + "\n" + pytest_result.stdout + pytest_result.stderr
-    passed = pytest_result.returncode == 0
+    result = subprocess.run(
+        [
+            "docker", "run", "--rm",
+            "-v", f"{repo_path}:/app",
+            "-w", "/app",
+            "python:3.11-slim",
+            "sh", "-c",
+            "pip install -r requirements.txt -q && python -m pytest -v --tb=long",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    output = result.stdout + result.stderr
+    passed = result.returncode == 0
 
     if passed:
         logger.info("Tests PASSED after fix")
     else:
-        logger.warning("Tests still FAILING after fix:\n%s", pytest_result.stdout[-3000:])
+        logger.warning("Tests still FAILING after fix:\n%s", output[-3000:])
 
     return passed, output
 
