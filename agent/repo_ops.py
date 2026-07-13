@@ -69,8 +69,10 @@ def run_tests(repo_path: str) -> tuple:
             "-w", "/app",
             "python:3.11-slim",
             "sh", "-c",
-            "pip install -r requirements.txt -q --target /app/.deps && "
-            "PYTHONPATH=/app/.deps python -m pytest -v --tb=long",
+            "pip install -r requirements.txt -q && "
+            "python -m pytest -v --tb=long; "
+            "find /app -name '__pycache__' -exec rm -rf {} + 2>/dev/null; "
+            "exit $?",
         ],
         capture_output=True,
         text=True,
