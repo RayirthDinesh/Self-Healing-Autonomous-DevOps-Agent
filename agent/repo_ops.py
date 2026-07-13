@@ -65,12 +65,12 @@ def run_tests(repo_path: str) -> tuple:
     result = subprocess.run(
         [
             "docker", "run", "--rm",
-            "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", f"{repo_path}:/app",
             "-w", "/app",
             "python:3.11-slim",
             "sh", "-c",
-            "pip install -r requirements.txt -q && python -m pytest -v --tb=long",
+            "pip install -r requirements.txt -q --target /app/.deps && "
+            "PYTHONPATH=/app/.deps python -m pytest -v --tb=long",
         ],
         capture_output=True,
         text=True,
