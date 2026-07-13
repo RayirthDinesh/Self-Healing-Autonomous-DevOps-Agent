@@ -71,8 +71,9 @@ def run_tests(repo_path: str) -> tuple:
             "sh", "-c",
             "pip install -r requirements.txt -q && "
             "python -m pytest -v --tb=long; "
-            "find /app -name '__pycache__' -exec rm -rf {} + 2>/dev/null; "
-            "exit $?",
+            "PYTEST_EXIT=$?; "
+            "chmod -R 777 /app 2>/dev/null || true; "
+            "exit $PYTEST_EXIT",
         ],
         capture_output=True,
         text=True,
