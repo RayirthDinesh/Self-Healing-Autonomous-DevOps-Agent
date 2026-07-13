@@ -54,6 +54,7 @@ def apply_fixes(repo_path: str, fixes: list):
 
 
 def run_tests(repo_path: str) -> tuple:
+    logger.info("Running tests inside Docker container (python:3.11-slim)...")
     """Run pytest inside a throwaway Docker container.
 
     The container gets the cloned repo mounted in, installs dependencies,
