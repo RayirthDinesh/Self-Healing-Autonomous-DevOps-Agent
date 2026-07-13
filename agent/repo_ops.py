@@ -96,6 +96,7 @@ def commit_and_push(repo_path: str, fix_branch: str, github_token: str, repo: st
 
     subprocess.run(["git", "config", "user.email", "sre-agent@auto.fix"], cwd=repo_path, check=True)
     subprocess.run(["git", "config", "user.name", "SRE Agent"], cwd=repo_path, check=True)
+    subprocess.run(["git", "config", "core.fileMode", "false"], cwd=repo_path, check=True)
 
     subprocess.run(["git", "checkout", "-b", fix_branch], cwd=repo_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=repo_path, check=True)
