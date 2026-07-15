@@ -14,6 +14,12 @@ from dataclasses import dataclass, field
 
 from rank_bm25 import BM25Okapi
 
+try:
+    from embeddings import semantic_scores as _semantic_scores
+    _EMBEDDINGS_AVAILABLE = True
+except Exception:
+    _EMBEDDINGS_AVAILABLE = False
+
 logger = logging.getLogger("sre-agent-webhook")
 
 _DEFAULT_FULL_MAX = 5
@@ -125,11 +131,34 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str) -> TieredCon
         for path in corpus_paths
     ]
     query = _tokenize(test_logs[-4000:])
-    scores = dict(zip(corpus_paths, BM25Okapi(corpus).get_scores(query))) if corpus else {}
+    bm25_raw = dict(zip(corpus_paths, BM25Okapi(corpus).get_scores(query))) if corpus else {}
     rank = repo_map.get("rank", {})
 
+    # Normalise BM25 to [0,1] so it can be combined with cosine similarity
+    bm25_max = max(bm25_raw.values(), default=1.0) or 1.0
+    scores = {p: v / bm25_max for p, v in bm25_raw.items()}
+
+    # Semantic scores (cosine similarity) — fallback to empty dict if fastembed not installed
+    if _EMBEDDINGS_AVAILABLE:
+        try:
+            sem = _semantic_scores(test_logs[-2000:], contents)
+        except Exception as e:
+            logger.warning("Semantic scoring failed (%s) — using BM25 only", e)
+            sem = {}
+    else:
+        sem = {}
+
+    sem_weight = 0.5 if sem else 0.0
+    bm25_weight = 1.0 - sem_weight
+
     def order(paths):
-        return sorted(paths, key=lambda p: (-scores.get(p, 0.0), -rank.get(p, 0.0)))
+        return sorted(
+            paths,
+            key=lambda p: (
+                -(bm25_weight * scores.get(p, 0.0) + sem_weight * sem.get(p, 0.0)),
+                -rank.get(p, 0.0),
+            ),
+        )
 
     full_paths = order(seeds)[:full_max]
 
