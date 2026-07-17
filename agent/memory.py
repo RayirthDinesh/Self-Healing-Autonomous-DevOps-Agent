@@ -117,10 +117,15 @@ def _connect() -> sqlite3.Connection:
         os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
     conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
-    try:  # Phase 2 migration — no-op once the column exists
-        conn.execute("ALTER TABLE incidents ADD COLUMN signature TEXT")
-    except sqlite3.OperationalError:
-        pass
+    # Guarded migrations — each a no-op once the column exists
+    for ddl in (
+        "ALTER TABLE incidents ADD COLUMN signature TEXT",
+        "ALTER TABLE incidents ADD COLUMN validator_output TEXT",
+    ):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
     return conn
 
 
@@ -231,8 +236,12 @@ def update_repo_state(repo: str, commit_sha: str, clone_path: str, repo_map: dic
 @_never_fatal(None)
 def record_incident(repo: str, branch: str, commit_sha: str, test_logs: str,
                     diagnosis: str, files_fixed: list, fix_diff: str,
-                    suite_green: bool, attempt: int):
-    """Store one fix attempt that reached the test suite. Returns the incident id."""
+                    suite_green: bool, attempt: int, validator_output: str = ""):
+    """Store one fix attempt that reached the test suite. Returns the incident id.
+
+    validator_output — tail of the post-fix test run, so a red incident is
+    diagnosable from the DB alone (infra flake vs genuinely wrong fix).
+    """
     excerpt = test_logs[-_LOG_EXCERPT_CHARS:]
     vec = _embed(excerpt)
     blob = vec.astype("float32").tobytes() if vec is not None else None
@@ -240,10 +249,12 @@ def record_incident(repo: str, branch: str, commit_sha: str, test_logs: str,
         cur = conn.execute(
             "INSERT INTO incidents (repo, branch, commit_sha, error_class, log_excerpt,"
             " log_embedding, diagnosis, files_fixed, fix_diff, suite_green, attempt,"
-            " created_at, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " created_at, signature, validator_output)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (repo, branch, commit_sha, classify_error(test_logs), excerpt, blob,
              diagnosis, json.dumps(files_fixed), fix_diff, int(suite_green), attempt,
-             time.time(), failure_signature(test_logs)),
+             time.time(), failure_signature(test_logs),
+             (validator_output or "")[-_LOG_EXCERPT_CHARS:]),
         )
         return cur.lastrowid
 

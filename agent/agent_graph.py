@@ -10,6 +10,7 @@ validator -(green)-> publisher | -(red, demoted)-> triage
 import logging
 import os
 import tempfile
+import time
 
 from langgraph.graph import END, StateGraph
 
@@ -79,8 +80,10 @@ def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str):
             "attempt": 0, "llm_calls": 0, "critic_rounds": 0,
         }
         try:
+            # thread_id must be unique per run: reusing one resumes the old
+            # checkpointed state and leaks keys (pr_url, done) across runs
             final = app.invoke(state, config={
-                "configurable": {"thread_id": f"{repo}@{commit_sha}"},
+                "configurable": {"thread_id": f"{repo}@{commit_sha}@{int(time.time())}"},
                 "recursion_limit": 60,
                 # LangSmith trace naming (no-op when tracing is off)
                 "run_name": f"{branch}@{commit_sha[:7]}",

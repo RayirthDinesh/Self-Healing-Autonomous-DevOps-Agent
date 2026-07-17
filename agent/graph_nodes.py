@@ -327,6 +327,7 @@ def validator(state):
         test_logs=state["test_logs"], diagnosis=state.get("diagnosis", ""),
         files_fixed=[f["filename"] for f in state["fixes"]],
         fix_diff=fix_diff, suite_green=passed, attempt=attempt,
+        validator_output=test_output,
     )
     update.update(passed=passed, test_output=test_output, incident_id=incident_id)
     _step({**state, "incident_id": incident_id}, "validator",

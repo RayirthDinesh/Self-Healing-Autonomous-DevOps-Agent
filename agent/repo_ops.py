@@ -70,7 +70,7 @@ def run_tests(repo_path: str) -> tuple:
             "-w", "/app",
             "python:3.11-slim",
             "sh", "-c",
-            "pip install -r requirements.txt -q && "
+            "pip install -r requirements.txt -q --timeout 120 --retries 5 && "
             "python -m pytest -v --tb=long; "
             "PYTEST_EXIT=$?; "
             "chmod -R 777 /app 2>/dev/null || true; "

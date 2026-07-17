@@ -45,6 +45,17 @@ def test_record_and_recall_incident_by_error_class(no_embeddings):
     assert found[0]["files_fixed"] == ["src/aggregator.py"]
 
 
+def test_validator_output_stored_for_postmortem(no_embeddings):
+    memory.record_incident(
+        "o/r", "b", "s", NAME_LOG, "d", ["src/a.py"], "diff",
+        suite_green=False, attempt=1,
+        validator_output="TimeoutError: The read operation timed out",
+    )
+    with memory._connect() as conn:
+        row = conn.execute("SELECT validator_output FROM incidents").fetchone()
+    assert "TimeoutError" in row[0]
+
+
 def test_failed_attempts_not_recalled_as_examples(no_embeddings):
     memory.record_incident(
         "o/r", "bug/x", "sha1", NAME_LOG, "wrong guess",

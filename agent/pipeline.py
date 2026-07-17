@@ -119,6 +119,7 @@ def _run_legacy(repo: str, branch: str, commit_sha: str, test_logs: str):
                 repo=repo, branch=branch, commit_sha=commit_sha, test_logs=test_logs,
                 diagnosis=diagnosis, files_fixed=[f["filename"] for f in fixes],
                 fix_diff=get_diff(workdir), suite_green=passed, attempt=attempt,
+                validator_output=test_output,
             )
             if passed:
                 break
