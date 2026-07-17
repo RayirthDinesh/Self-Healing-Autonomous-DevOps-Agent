@@ -10,3 +10,7 @@ tree-sitter-typescript
 rank-bm25
 fastembed
 numpy
+langgraph
+langchain-core
+langchain-openai
+langgraph-checkpoint-sqlite

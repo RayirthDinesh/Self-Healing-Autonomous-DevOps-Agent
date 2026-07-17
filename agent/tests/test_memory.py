@@ -176,6 +176,58 @@ def test_memory_failure_never_raises(monkeypatch):
                                   suite_green=True, attempt=1) is None
 
 
+TRACEBACK_LOG = (
+    "FAILED tests/test_app.py::test_add - NameError\n"
+    'File "src/core.py", line 3\n'
+    "E       NameError: name 'totl' is not defined\n"
+)
+
+
+def test_failure_signature_composition():
+    sig = memory.failure_signature(TRACEBACK_LOG)
+    assert sig == "name-error|tests/test_app.py|src/core.py"
+    # same shape -> same key; different error text -> same key too (shape-based)
+    assert memory.failure_signature(TRACEBACK_LOG + "\nnoise") == sig
+
+
+def _merge_incident(monkeypatch, n):
+    """Record an incident for TRACEBACK_LOG, open PR n, sweep it as merged."""
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"merged": True, "state": "closed"}
+    monkeypatch.setattr(memory.requests, "get", lambda *a, **k: FakeResponse())
+    incident_id = memory.record_incident(
+        "o/r", "b", "s", TRACEBACK_LOG, "typo", ["src/core.py"], "diff",
+        suite_green=True, attempt=1,
+    )
+    memory.set_incident_pr(incident_id, f"https://github.com/o/r/pull/{n}")
+    memory.update_pr_fates("o/r", "tok")
+
+
+def test_fast_path_needs_two_merged_prs(no_embeddings, monkeypatch):
+    _merge_incident(monkeypatch, 1)
+    assert memory.fast_path_lookup("o/r", TRACEBACK_LOG) is None  # 1 merge: not proven
+
+    _merge_incident(monkeypatch, 2)
+    fp = memory.fast_path_lookup("o/r", TRACEBACK_LOG)
+    assert fp == {"signature": "name-error|tests/test_app.py|src/core.py",
+                  "target_files": ["src/core.py"]}
+    # different failure shape does not fire
+    assert memory.fast_path_lookup("o/r", "E  TypeError: boom") is None
+
+
+def test_fast_path_demoted_after_two_misses(no_embeddings, monkeypatch):
+    _merge_incident(monkeypatch, 1)
+    _merge_incident(monkeypatch, 2)
+    sig = memory.failure_signature(TRACEBACK_LOG)
+    memory.fast_path_miss("o/r", sig)
+    assert memory.fast_path_lookup("o/r", TRACEBACK_LOG) is not None  # 1 miss: still on
+    memory.fast_path_miss("o/r", sig)
+    assert memory.fast_path_lookup("o/r", TRACEBACK_LOG) is None      # 2 misses: off
+
+
 def test_agent_step_logged(no_embeddings):
     memory.log_agent_step(None, "retrieval", json.dumps({"files_full": 1}))
     with memory._connect() as conn:

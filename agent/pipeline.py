@@ -27,6 +27,18 @@ def _reset_workdir(workdir: str):
 
 
 def run(repo: str, branch: str, commit_sha: str, test_logs: str):
+    """Dispatch: AGENT_MODE=graph -> LangGraph multi-agent, else legacy pipeline."""
+    if os.getenv("AGENT_MODE", "legacy").lower() == "graph":
+        try:
+            from agent_graph import run_graph
+        except Exception as e:
+            logger.error("AGENT_MODE=graph but LangGraph unavailable (%s) — using legacy", e)
+        else:
+            return run_graph(repo, branch, commit_sha, test_logs)
+    return _run_legacy(repo, branch, commit_sha, test_logs)
+
+
+def _run_legacy(repo: str, branch: str, commit_sha: str, test_logs: str):
     """
     Full self-healing pipeline:
       1. Clone the failing branch

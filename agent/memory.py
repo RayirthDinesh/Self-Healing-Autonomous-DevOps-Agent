@@ -111,9 +111,16 @@ def _db_path() -> str:
 
 def _connect() -> sqlite3.Connection:
     path = _db_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Owner-only: incident rows carry repo diffs and CI log excerpts
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    if not os.path.exists(path):
+        os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
     conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
+    try:  # Phase 2 migration — no-op once the column exists
+        conn.execute("ALTER TABLE incidents ADD COLUMN signature TEXT")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
@@ -146,6 +153,23 @@ def classify_error(log: str) -> str:
         if pattern.search(log):
             return name
     return "other"
+
+
+_TEST_FILE_RE = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)test_[^/]*$|_test\.[a-z]+$")
+
+
+def failure_signature(test_logs: str) -> str:
+    """Composite fast-path key: error class + failing test files + traceback source.
+
+    Two failures with the same signature are 'the same bug shape' — the router
+    only skips triage/localization when this exact shape has merged before.
+    """
+    from retrieval import parse_failure_log
+    hits = parse_failure_log(test_logs)
+    tests = sorted(p for p in hits.files if _TEST_FILE_RE.search(p))
+    sources = sorted(p for p in hits.files if not _TEST_FILE_RE.search(p))
+    top_source = sources[0] if sources else ""
+    return f"{classify_error(test_logs)}|{','.join(tests)}|{top_source}"
 
 
 # ── Repo mental map ──────────────────────────────────────────────────────────
@@ -216,10 +240,10 @@ def record_incident(repo: str, branch: str, commit_sha: str, test_logs: str,
         cur = conn.execute(
             "INSERT INTO incidents (repo, branch, commit_sha, error_class, log_excerpt,"
             " log_embedding, diagnosis, files_fixed, fix_diff, suite_green, attempt,"
-            " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " created_at, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (repo, branch, commit_sha, classify_error(test_logs), excerpt, blob,
              diagnosis, json.dumps(files_fixed), fix_diff, int(suite_green), attempt,
-             time.time()),
+             time.time(), failure_signature(test_logs)),
         )
         return cur.lastrowid
 
@@ -302,11 +326,11 @@ def update_pr_fates(repo: str, github_token: str) -> dict:
     resolved = {}
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, pr_number, error_class, files_fixed FROM incidents"
+            "SELECT id, pr_number, error_class, files_fixed, signature FROM incidents"
             " WHERE repo = ? AND pr_state = 'open' AND pr_number IS NOT NULL",
             (repo,),
         ).fetchall()
-        for incident_id, number, error_class, files_json in rows:
+        for incident_id, number, error_class, files_json, signature in rows:
             response = requests.get(
                 f"https://api.github.com/repos/{repo}/pulls/{number}",
                 headers={"Authorization": f"token {github_token}",
@@ -322,6 +346,22 @@ def update_pr_fates(repo: str, github_token: str) -> dict:
             else:
                 continue  # still open
             conn.execute("UPDATE incidents SET pr_state = ? WHERE id = ?", (fate, incident_id))
+            if signature:
+                if fate == "merged":
+                    conn.execute(
+                        "INSERT INTO fast_paths (repo, error_class, signature, target_files,"
+                        " merged_count, miss_count, updated_at) VALUES (?, ?, ?, ?, 1, 0, ?)"
+                        " ON CONFLICT(repo, error_class, signature) DO UPDATE SET"
+                        " merged_count = merged_count + 1, target_files = excluded.target_files,"
+                        " updated_at = excluded.updated_at",
+                        (repo, error_class, signature, files_json, time.time()),
+                    )
+                else:  # rejected PR: the fast path (if any) produced a bad fix
+                    conn.execute(
+                        "UPDATE fast_paths SET miss_count = miss_count + 1"
+                        " WHERE repo = ? AND signature = ?",
+                        (repo, signature),
+                    )
             for path in json.loads(files_json or "[]"):
                 if fate == "merged":
                     conn.execute(
@@ -353,6 +393,42 @@ def blame_scores(repo: str, error_class: str) -> dict:
         return {}
     top = max(weight for _, weight in rows)
     return {path: weight / top for path, weight in rows}
+
+
+# ── Fast paths (Phase 2 router) ──────────────────────────────────────────────
+
+_FAST_PATH_MIN_MERGED = 2
+_FAST_PATH_MAX_MISSES = 2
+
+
+@_never_fatal(None)
+def fast_path_lookup(repo: str, test_logs: str):
+    """If this exact failure shape has merged >= 2 times (and < 2 misses),
+    return {'signature', 'target_files'} so the router can skip triage/localize."""
+    signature = failure_signature(test_logs)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT target_files, merged_count, miss_count FROM fast_paths"
+            " WHERE repo = ? AND signature = ?",
+            (repo, signature),
+        ).fetchone()
+    if not row:
+        return None
+    target_files, merged_count, miss_count = row
+    if merged_count >= _FAST_PATH_MIN_MERGED and miss_count < _FAST_PATH_MAX_MISSES:
+        return {"signature": signature, "target_files": json.loads(target_files or "[]")}
+    return None
+
+
+@_never_fatal(None)
+def fast_path_miss(repo: str, signature: str):
+    """Demote a fast path whose targeted fix failed validation."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE fast_paths SET miss_count = miss_count + 1, updated_at = ?"
+            " WHERE repo = ? AND signature = ?",
+            (time.time(), repo, signature),
+        )
 
 
 # ── Agent step log (Phase 2 consumes this) ───────────────────────────────────
