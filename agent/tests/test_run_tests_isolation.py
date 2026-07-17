@@ -1,4 +1,4 @@
-"""run_tests must execute in a per-run venv, never the agent's own env."""
+"""run_tests must execute inside the Docker sandbox, never the agent's own env."""
 
 import sys
 import textwrap
@@ -6,10 +6,10 @@ import textwrap
 from repo_ops import run_tests
 
 
-def test_run_tests_uses_isolated_venv(tmp_path):
-    """The repo's pytest must run from a venv inside the workdir, so
-    installing the repo's requirements can never mutate the host env."""
-    (tmp_path / "requirements.txt").write_text("")  # nothing to install
+def test_run_tests_runs_inside_container(tmp_path):
+    """The repo's suite must run in the throwaway container, so nothing the
+    fix does can touch the host or bleed into the next run."""
+    (tmp_path / "requirements.txt").write_text("pytest\n")
     (tmp_path / "test_probe.py").write_text(textwrap.dedent("""
         import os
         import sys
@@ -22,9 +22,8 @@ def test_run_tests_uses_isolated_venv(tmp_path):
 
     passed, output = run_tests(str(tmp_path))
 
-    assert passed is True
+    assert passed is True, output[-2000:]
     exe = (tmp_path / "probe.txt").read_text().strip()
     assert exe != sys.executable, "suite ran in the agent's own environment"
-    assert "sre-run-" in exe, f"suite not in a per-run venv: {exe}"
-    # venv must NOT live inside the clone — commit_and_push does `git add -A`
-    assert str(tmp_path) not in exe
+    # container interpreter is a POSIX path, never the host's Windows/venv python
+    assert exe.startswith("/"), f"suite not inside the container: {exe}"

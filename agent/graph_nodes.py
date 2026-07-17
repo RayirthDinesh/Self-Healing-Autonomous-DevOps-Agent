@@ -134,7 +134,10 @@ def _fallback_candidates(state) -> list:
         if _visible(path, repo_map) and path not in seeds:
             seeds.append(path)
 
-    for path in parse_failure_log(state["test_logs"]).files:
+    hits = parse_failure_log(state["test_logs"])
+    if hits.install_failure and "requirements.txt" in files:
+        add("requirements.txt")
+    for path in hits.files:
         if path not in files:
             continue
         if files[path]["is_test"]:
@@ -235,6 +238,9 @@ def fixer(state):
         f"\n## Source files\n{files_section}\n"
         + (f"\nA previous attempt FAILED validation with:\n```\n{feedback[-2000:]}\n```\n"
            if feedback else "")
+        + (f"\nThis exact change was already tried and FAILED — do NOT propose it again, "
+           f"find a materially different fix:\n```diff\n{state['last_fix_diff'][-2000:]}\n```\n"
+           if state.get("last_fix_diff") else "")
         + (f"\nReviewer feedback on your last proposal:\n{critique}\n" if critique else "")
         + f"\n{_JSON_CONTRACT}"
     )
@@ -315,11 +321,12 @@ def validator(state):
 
     apply_fixes(workdir, state["fixes"])
     passed, test_output = run_tests(workdir)
+    fix_diff = get_diff(workdir)
     incident_id = memory.record_incident(
         repo=state["repo"], branch=state["branch"], commit_sha=state["commit_sha"],
         test_logs=state["test_logs"], diagnosis=state.get("diagnosis", ""),
         files_fixed=[f["filename"] for f in state["fixes"]],
-        fix_diff=get_diff(workdir), suite_green=passed, attempt=attempt,
+        fix_diff=fix_diff, suite_green=passed, attempt=attempt,
     )
     update.update(passed=passed, test_output=test_output, incident_id=incident_id)
     _step({**state, "incident_id": incident_id}, "validator",
@@ -327,6 +334,7 @@ def validator(state):
 
     if not passed:
         update["failure_feedback"] = test_output[-3000:]
+        update["last_fix_diff"] = fix_diff
         if state.get("fast_path_used"):
             memory.fast_path_miss(state["repo"], state["fast_path"]["signature"])
             logger.info("Fast path missed — demoted, rerouting through triage")

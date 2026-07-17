@@ -28,6 +28,7 @@ class AgentState(TypedDict, total=False):
     candidate_files: list       # paths the fixer will see in full
     context: dict               # {path: content} loaded for the fixer
     failure_feedback: str       # validator output fed into the retry loop
+    last_fix_diff: str          # diff of the last failed attempt — never repeat it
 
     # Fixer / critic
     diagnosis: str

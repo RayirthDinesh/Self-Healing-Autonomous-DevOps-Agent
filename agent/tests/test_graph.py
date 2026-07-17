@@ -189,6 +189,22 @@ def test_localizer_falls_back_to_seeds_on_garbage(wired):
     assert update["candidate_files"] == ["src/app.py"]
 
 
+def test_fallback_seeds_requirements_on_install_failure(wired):
+    repo_map = {"files": dict(REPO_MAP["files"],
+                              **{"requirements.txt": {"lang": "text", "size": 20,
+                                                      "is_test": False, "imports": [],
+                                                      "symbols": []}}),
+                "edges": REPO_MAP["edges"], "rank": REPO_MAP["rank"]}
+    state = {"repo": "o/r", "branch": "b", "commit_sha": "c",
+             "test_logs": "ERROR: No matching distribution found for pandas==0.24.0",
+             "workdir": str(wired["workdir"]), "repo_map": repo_map, "llm_calls": 0}
+    wired["script"][:] = ["garbage"] * 6
+
+    update = graph_nodes.localizer(state)
+
+    assert "requirements.txt" in update["candidate_files"]
+
+
 def test_fixer_guardrail_drops_protected_paths(wired):
     state = {"repo": "o/r", "test_logs": LOG, "context": {"src/app.py": "x"},
              "llm_calls": 0}
@@ -202,6 +218,20 @@ def test_fixer_guardrail_drops_protected_paths(wired):
     update = graph_nodes.fixer(state)
 
     assert [f["filename"] for f in update["fixes"]] == ["src/app.py"]
+
+
+def test_fixer_retry_sees_its_failed_diff(wired):
+    """A failed diff is fed back so the model cannot repeat the same fix."""
+    wired["script"][:] = [TRIAGE] + [LOCATE, FIX, APPROVE] * 2
+    wired["calls"]["test_results"][:] = [False, True]
+
+    wired["invoke"]()
+
+    fixer_prompts = [p for p in wired["calls"]["chat"] if "fixer agent" in p]
+    assert len(fixer_prompts) == 2
+    assert "already tried and FAILED" not in fixer_prompts[0]
+    assert "already tried and FAILED" in fixer_prompts[1]
+    assert "fake diff" in fixer_prompts[1]      # the wired get_diff stub's output
 
 
 def test_routing_budget_rails():
