@@ -82,6 +82,10 @@ def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str):
             final = app.invoke(state, config={
                 "configurable": {"thread_id": f"{repo}@{commit_sha}"},
                 "recursion_limit": 60,
+                # LangSmith trace naming (no-op when tracing is off)
+                "run_name": f"{branch}@{commit_sha[:7]}",
+                "tags": ["sre-agent", branch],
+                "metadata": {"repo": repo, "branch": branch, "commit": commit_sha},
             })
         except Exception as e:
             logger.error("Graph run failed: %s", e)
