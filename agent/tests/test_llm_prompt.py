@@ -28,3 +28,24 @@ def test_legacy_dict_context_still_works():
     prompt = _build_prompt("boom", {"src/a.py": "x = 1\n"})
     assert "x = 1" in prompt
     assert '"diagnosis"' in prompt
+
+
+def test_no_incidents_no_section():
+    assert "Past incidents" not in _build_prompt("boom", _ctx())
+    assert "Past incidents" not in _build_prompt("boom", _ctx(), incidents=[])
+
+
+def test_incidents_block_with_guard_sentence():
+    incidents = [{
+        "error_class": "name-error",
+        "diagnosis": "typo in variable name",
+        "files_fixed": ["src/aggregator.py"],
+        "fix_diff": "-    return totl\n+    return total",
+    }]
+    prompt = _build_prompt("E  NameError: name 'totl'", _ctx(), incidents=incidents)
+    assert "## Past incidents in this repo" in prompt
+    assert "historical hints" in prompt                    # guard sentence present
+    assert "typo in variable name" in prompt
+    assert "+    return total" in prompt
+    # incidents come before the repo map so the hint frames the code, not vice versa
+    assert prompt.index("Past incidents") < prompt.index("## Repo Map")

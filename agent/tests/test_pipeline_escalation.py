@@ -2,6 +2,7 @@
 
 import pytest
 
+import memory
 import pipeline
 
 
@@ -10,13 +11,18 @@ def wired(monkeypatch, tmp_path):
     """Stub every external effect; record what the pipeline did."""
     calls = {"llm_contexts": [], "test_results": [], "pushed": False, "pr": False}
 
+    # Memory writes to an isolated DB; no embedding model, no git diff subprocess
+    monkeypatch.setenv("MEMORY_DB", str(tmp_path / "memory.db"))
+    monkeypatch.setattr(memory, "_embed", lambda text: None)
+    monkeypatch.setattr(pipeline, "get_diff", lambda path: "fake diff")
+
     monkeypatch.setattr(pipeline, "clone_branch", lambda repo, branch, dest: None)
     monkeypatch.setattr(
         pipeline, "get_repo_map",
         lambda repo, sha, path: {"files": {}, "edges": [], "rank": {}, "commit": sha},
     )
 
-    def fake_select(logs, m, path):
+    def fake_select(logs, m, path, blame=None):
         from retrieval import TieredContext
         return TieredContext(full={"src/a.py": "old"}, signatures={}, overview={},
                              metrics={"files_full": 1, "files_total": 1,
@@ -26,7 +32,7 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "select_context", fake_select)
     monkeypatch.setattr(pipeline, "read_source_files", lambda path: {"src/a.py": "old", "src/b.py": "x"})
 
-    def fake_llm(logs, context):
+    def fake_llm(logs, context, incidents=None):
         calls["llm_contexts"].append(context)
         return {"diagnosis": "d", "fixes": [{"filename": "src/a.py", "content": "new"}]}
     monkeypatch.setattr(pipeline, "call_llm", fake_llm)
@@ -65,3 +71,24 @@ def test_gives_up_after_escalation_fails(wired):
     pipeline.run("o/r", "main", "c0ffee1234567", "log text")
     assert len(wired["llm_contexts"]) == 2
     assert not wired["pushed"] and not wired["pr"]
+
+
+def test_incidents_recorded_per_attempt_with_pr_fate(wired):
+    """Failed attempt stored as negative example; green one linked to the PR."""
+    wired["test_results"][:] = [False, True]
+    pipeline.run("o/r", "main", "c0ffee1234567", "log text")
+
+    with memory._connect() as conn:
+        rows = conn.execute(
+            "SELECT attempt, suite_green, pr_state FROM incidents ORDER BY id"
+        ).fetchall()
+    assert rows == [(1, 0, "none"), (2, 1, "open")]
+
+
+def test_failed_run_records_negative_incident_only(wired):
+    wired["test_results"][:] = [False, False]
+    pipeline.run("o/r", "main", "c0ffee1234567", "log text")
+
+    with memory._connect() as conn:
+        rows = conn.execute("SELECT suite_green, pr_state FROM incidents").fetchall()
+    assert rows == [(0, "none"), (0, "none")]

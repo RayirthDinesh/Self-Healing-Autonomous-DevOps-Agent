@@ -146,6 +146,24 @@ def test_bm25_ranks_named_file_first(demo_like_repo):
     assert next(iter(ctx.full)) == "src/aggregator.py"
 
 
+def test_blame_prior_boosts_ranking(demo_like_repo, monkeypatch):
+    # log with no path hits and no token overlap: BM25 and seeds contribute
+    # nothing, so ranking is decided by the blame prior alone
+    monkeypatch.setattr("retrieval._EMBEDDINGS_AVAILABLE", False)
+    m = build_map("o/r", "s", str(demo_like_repo))
+    ctx = select_context("boom kaput", m, str(demo_like_repo),
+                         blame={"src/ingestion.py": 1.0})
+    assert next(iter(ctx.signatures)) == "src/ingestion.py"
+
+
+def test_blame_none_keeps_current_behavior(demo_like_repo):
+    m = build_map("o/r", "s", str(demo_like_repo))
+    a = select_context(PYTEST_LOG, m, str(demo_like_repo))
+    b = select_context(PYTEST_LOG, m, str(demo_like_repo), blame=None)
+    assert list(a.full) == list(b.full)
+    assert list(a.signatures) == list(b.signatures)
+
+
 def test_metrics_reported(demo_like_repo):
     m = build_map("o/r", "s", str(demo_like_repo))
     ctx = select_context(PYTEST_LOG, m, str(demo_like_repo))

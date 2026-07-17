@@ -90,8 +90,13 @@ def _estimate_tokens(text_parts) -> int:
     return sum(len(t) for t in text_parts) // 4
 
 
-def select_context(test_logs: str, repo_map: dict, clone_path: str) -> TieredContext:
-    """Assemble the tiered LLM context for one failure."""
+def select_context(test_logs: str, repo_map: dict, clone_path: str,
+                   blame: dict = None) -> TieredContext:
+    """Assemble the tiered LLM context for one failure.
+
+    blame — optional {path: weight in [0,1]} prior from memory: files that
+    historically fixed this error class rank higher.
+    """
     started = time.monotonic()
     full_max = int(os.environ.get("CONTEXT_FULL_MAX", _DEFAULT_FULL_MAX))
     sig_max = int(os.environ.get("CONTEXT_SIG_MAX", _DEFAULT_SIG_MAX))
@@ -148,14 +153,19 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str) -> TieredCon
     else:
         sem = {}
 
-    sem_weight = 0.5 if sem else 0.0
-    bm25_weight = 1.0 - sem_weight
+    # Blame prior (learned from merged auto-fix PRs) joins as a third signal
+    blame = blame or {}
+    blame_weight = 0.2 if blame else 0.0
+    sem_weight = (1.0 - blame_weight) / 2 if sem else 0.0
+    bm25_weight = 1.0 - sem_weight - blame_weight
 
     def order(paths):
         return sorted(
             paths,
             key=lambda p: (
-                -(bm25_weight * scores.get(p, 0.0) + sem_weight * sem.get(p, 0.0)),
+                -(bm25_weight * scores.get(p, 0.0)
+                  + sem_weight * sem.get(p, 0.0)
+                  + blame_weight * blame.get(p, 0.0)),
                 -rank.get(p, 0.0),
             ),
         )

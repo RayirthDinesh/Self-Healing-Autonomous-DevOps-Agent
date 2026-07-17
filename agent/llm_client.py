@@ -26,7 +26,26 @@ _JSON_CONTRACT = """Respond with raw JSON only — no markdown, no explanation o
 Only include files that need to change. If requirements.txt is the problem, include that too."""
 
 
-def _build_prompt(test_logs: str, context) -> str:
+def _incidents_section(incidents) -> str:
+    """Few-shot block built from past merged/green fixes in this repo."""
+    if not incidents:
+        return ""
+    parts = [
+        "\n## Past incidents in this repo\n"
+        "Past incidents are historical hints — the current bug may differ. "
+        "Verify against the code shown.\n"
+    ]
+    for inc in incidents:
+        files = ", ".join(inc.get("files_fixed", []))
+        parts.append(
+            f"\n### {inc.get('error_class', 'incident')} — fixed {files}\n"
+            f"Diagnosis: {inc.get('diagnosis', '')}\n"
+            f"```diff\n{inc.get('fix_diff', '')}\n```\n"
+        )
+    return "".join(parts)
+
+
+def _build_prompt(test_logs: str, context, incidents=None) -> str:
     """Build the prompt from a TieredContext, or a legacy {path: content} dict
     (used by the full-repo escalation fallback)."""
     header = (
@@ -34,6 +53,7 @@ def _build_prompt(test_logs: str, context) -> str:
         "The following tests just failed. Your job is to find the bug in the "
         "source files and fix it.\n\n"
         f"## Failed Test Output\n```\n{test_logs[-6000:]}\n```\n"
+        f"{_incidents_section(incidents)}"
     )
 
     if isinstance(context, dict):
@@ -62,12 +82,12 @@ def _build_prompt(test_logs: str, context) -> str:
     )
 
 
-def call_llm(test_logs: str, context) -> dict:
+def call_llm(test_logs: str, context, incidents=None) -> dict:
     """Call the LLM and return a parsed dict with 'diagnosis' and 'fixes'."""
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set in .env")
 
-    prompt = _build_prompt(test_logs, context)
+    prompt = _build_prompt(test_logs, context, incidents)
 
     logger.info("Calling LLM (%s) to diagnose failure...", MODEL)
 

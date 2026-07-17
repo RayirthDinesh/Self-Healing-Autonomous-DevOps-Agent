@@ -91,6 +91,18 @@ def run_tests(repo_path: str) -> tuple:
     return passed, output
 
 
+def get_diff(repo_path: str) -> str:
+    """Diff of the applied fix against the cloned HEAD (for incident memory)."""
+    result = subprocess.run(
+        # fileMode off: the Docker test run chmods the tree, which is not part of the fix
+        ["git", "-c", "core.fileMode=false", "diff", "--no-color"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
 def commit_and_push(repo_path: str, fix_branch: str, github_token: str, repo: str):
     """Create a new branch in the clone, commit the fix, push it to GitHub."""
     env = os.environ.copy()
