@@ -8,6 +8,7 @@ tree-sitter-python
 tree-sitter-javascript
 tree-sitter-typescript
 rank-bm25
+flake8
 fastembed
 numpy
 langgraph

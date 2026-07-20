@@ -91,6 +91,35 @@ def run_tests(repo_path: str) -> tuple:
     return passed, output
 
 
+def run_static_analysis(repo_path: str) -> tuple:
+    """Run flake8 on the fixed repo in ~1 second before the 60-second Docker run.
+
+    Only checks for errors that guarantee test failure:
+      E9xx — syntax errors, bad encoding
+      F821 — undefined name
+      F823 — undefined local variable
+
+    Style warnings are ignored — we only care about hard failures.
+    Returns (passed: bool, output: str). Never raises: if flake8 is missing,
+    returns (True, "") so the pipeline falls through to Docker unchanged.
+    """
+    try:
+        result = subprocess.run(
+            ["python", "-m", "flake8", "--select=E9,F821,F823", "--statistics", repo_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        output = result.stdout + result.stderr
+        passed = result.returncode == 0
+        if passed:
+            logger.info("Static analysis passed — proceeding to Docker")
+        else:
+            logger.warning("Static analysis caught errors (skipping Docker):\n%s", output)
+        return passed, output
+    except Exception as e:
+        logger.warning("flake8 unavailable (%s) — skipping static analysis", e)
+        return True, ""
+
+
 def get_diff(repo_path: str) -> str:
     """Diff of the applied fix against the cloned HEAD (for incident memory)."""
     result = subprocess.run(

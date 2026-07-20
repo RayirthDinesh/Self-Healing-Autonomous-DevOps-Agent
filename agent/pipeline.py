@@ -10,7 +10,8 @@ from github_ops import create_pull_request
 from llm_client import call_llm
 from repo_map import get_repo_map
 from repo_ops import (
-    apply_fixes, clone_branch, commit_and_push, get_diff, read_source_files, run_tests,
+    apply_fixes, clone_branch, commit_and_push, get_diff,
+    read_source_files, run_static_analysis, run_tests,
 )
 from retrieval import select_context
 
@@ -111,7 +112,15 @@ def _run_legacy(repo: str, branch: str, commit_sha: str, test_logs: str):
                 return
 
             apply_fixes(workdir, fixes)
-            passed, test_output = run_tests(workdir)
+
+            # Fast pre-check: flake8 catches syntax errors and undefined names
+            # in ~1 second. If it fails, skip the 60-second Docker run entirely
+            # and feed the error back as the failure signal for the next attempt.
+            static_ok, static_out = run_static_analysis(workdir)
+            if not static_ok:
+                passed, test_output = False, static_out
+            else:
+                passed, test_output = run_tests(workdir)
 
             # Every attempt that reached the suite is an incident — failed
             # attempts are stored as negative examples (suite_green=0)
