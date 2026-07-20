@@ -48,3 +48,23 @@ def semantic_scores(query: str, corpus: dict) -> dict:
     """Return {path: cosine_similarity} between query and each file's content."""
     query_vec = embed(query)
     return {path: cosine(query_vec, embed(text)) for path, text in corpus.items()}
+
+
+def chunk_scores(query: str, file_chunks: dict) -> dict:
+    """Return {path: best_chunk_cosine_similarity} using function-level chunks.
+
+    file_chunks — {path: [chunk_dict, ...]} from chunker.chunks_for_repo()
+
+    For each file we embed every function separately and take the MAX similarity
+    across all its chunks. A file scores high if even one of its functions is
+    semantically close to the error — much more precise than averaging the whole
+    file together.
+    """
+    query_vec = embed(query)
+    scores = {}
+    for path, chunks in file_chunks.items():
+        if not chunks:
+            scores[path] = 0.0
+            continue
+        scores[path] = max(cosine(query_vec, embed(c["text"])) for c in chunks)
+    return scores

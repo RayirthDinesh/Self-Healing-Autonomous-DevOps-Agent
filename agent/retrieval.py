@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from rank_bm25 import BM25Okapi
 
 try:
-    from embeddings import semantic_scores as _semantic_scores
+    from chunker import chunks_for_repo as _chunks_for_repo
+    from embeddings import chunk_scores as _chunk_scores
     _EMBEDDINGS_AVAILABLE = True
 except Exception:
     _EMBEDDINGS_AVAILABLE = False
@@ -143,10 +144,11 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
     bm25_max = max(bm25_raw.values(), default=1.0) or 1.0
     scores = {p: v / bm25_max for p, v in bm25_raw.items()}
 
-    # Semantic scores (cosine similarity) — fallback to empty dict if fastembed not installed
+    # Chunk-level semantic scores — embed each function separately, take best per file
     if _EMBEDDINGS_AVAILABLE:
         try:
-            sem = _semantic_scores(test_logs[-2000:], contents)
+            file_chunks = _chunks_for_repo(contents, repo_map["files"])
+            sem = _chunk_scores(test_logs[-2000:], file_chunks)
         except Exception as e:
             logger.warning("Semantic scoring failed (%s) — using BM25 only", e)
             sem = {}

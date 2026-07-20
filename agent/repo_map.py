@@ -78,6 +78,7 @@ def _walk_python(tree, src):
                     "sig": _node_text(child, src).split("\n")[0].strip(),
                     "doc": _py_docstring(body, src) if body else "",
                     "line": child.start_point[0] + 1,
+                    "end_line": child.end_point[0] + 1,
                 })
                 visit(child, class_depth)
             elif child.type == "class_definition":
@@ -89,6 +90,7 @@ def _walk_python(tree, src):
                     "sig": _node_text(child, src).split("\n")[0].strip(),
                     "doc": _py_docstring(body, src) if body else "",
                     "line": child.start_point[0] + 1,
+                    "end_line": child.end_point[0] + 1,
                 })
                 visit(child, class_depth + 1)
             else:
@@ -116,6 +118,7 @@ def _walk_js(tree, src):
                         "sig": _node_text(child, src).split("\n")[0].strip(" {"),
                         "doc": "",
                         "line": child.start_point[0] + 1,
+                        "end_line": child.end_point[0] + 1,
                     })
             elif child.type == "class_declaration":
                 name = child.child_by_field_name("name")
@@ -126,6 +129,7 @@ def _walk_js(tree, src):
                         "sig": _node_text(child, src).split("\n")[0].strip(" {"),
                         "doc": "",
                         "line": child.start_point[0] + 1,
+                        "end_line": child.end_point[0] + 1,
                     })
             elif child.type == "method_definition":
                 name = child.child_by_field_name("name")
@@ -136,6 +140,7 @@ def _walk_js(tree, src):
                         "sig": _node_text(child, src).split("\n")[0].strip(" {"),
                         "doc": "",
                         "line": child.start_point[0] + 1,
+                        "end_line": child.end_point[0] + 1,
                     })
             visit(child)
 
