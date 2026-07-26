@@ -18,12 +18,17 @@ _JSON_CONTRACT = """Respond with raw JSON only — no markdown, no explanation o
   "fixes": [
     {
       "filename": "relative/path/to/file",
-      "content": "the full corrected file content"
+      "search": "exact lines from the file to replace — copy verbatim, including indentation",
+      "replace": "the corrected lines that replace the search block"
     }
   ]
 }
 
-Only include files that need to change. If requirements.txt is the problem, include that too."""
+Rules for fixes:
+- Use "search" + "replace" for targeted edits. Copy the search lines EXACTLY as they appear
+  in the file — same indentation, same whitespace. The search must match uniquely.
+- Only include files that actually need to change.
+- If requirements.txt is the problem, include that too."""
 
 
 def _incidents_section(incidents) -> str:

@@ -44,13 +44,42 @@ def read_source_files(repo_path: str) -> dict:
 
 
 def apply_fixes(repo_path: str, fixes: list):
-    """Write each fixed file back into the cloned repo."""
+    """Apply each fix to the cloned repo.
+
+    Supports two formats from the LLM:
+      search/replace — find an exact block and swap only those lines (preferred).
+                       Leaves the rest of the file completely untouched.
+      content        — full file overwrite (fallback for new files or total rewrites).
+    """
     for fix in fixes:
         filepath = os.path.join(repo_path, fix["filename"])
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, "w") as f:
-            f.write(fix["content"])
-        logger.info("Applied fix to %s", fix["filename"])
+
+        if "search" in fix and "replace" in fix:
+            # Targeted edit — only touch the lines that need to change
+            try:
+                with open(filepath, encoding="utf-8") as f:
+                    original = f.read()
+                search_text = fix["search"]
+                if search_text not in original:
+                    logger.error(
+                        "apply_fixes: search block not found in %s — skipping",
+                        fix["filename"],
+                    )
+                    continue
+                updated = original.replace(search_text, fix["replace"], 1)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(updated)
+                logger.info("Applied search/replace fix to %s", fix["filename"])
+            except FileNotFoundError:
+                logger.error("apply_fixes: file not found: %s", fix["filename"])
+        elif "content" in fix:
+            # Full file overwrite (new file or total rewrite)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(fix["content"])
+            logger.info("Applied full-file fix to %s", fix["filename"])
+        else:
+            logger.warning("apply_fixes: fix for %s has neither search/replace nor content — skipping", fix["filename"])
 
 
 def run_tests(repo_path: str) -> tuple:
