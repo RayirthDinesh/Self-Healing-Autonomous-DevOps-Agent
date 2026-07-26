@@ -30,7 +30,9 @@ _CRITIC_MAX_ROUNDS = 1
 
 class FileFix(BaseModel):
     filename: str
-    content: str
+    content: str = ""      # full file overwrite (legacy / new files)
+    search: str = ""       # exact block to find  (preferred targeted edit)
+    replace: str = ""      # replacement for that block
 
 
 class FixResult(BaseModel):
@@ -258,7 +260,13 @@ def fixer(state):
         if clean.startswith(("tests", "agent", ".git", ".github")) or "/test" in clean:
             logger.warning("Fixer tried to modify %s — dropped", clean)
             continue
-        fixes.append({"filename": clean, "content": fix.content})
+        entry = {"filename": clean}
+        if fix.search:
+            entry["search"] = fix.search
+            entry["replace"] = fix.replace
+        else:
+            entry["content"] = fix.content
+        fixes.append(entry)
 
     _step(state, "fixer", json.dumps(
         {"diagnosis": result.diagnosis, "files": [f["filename"] for f in fixes]}))
@@ -270,10 +278,14 @@ def critic(state):
     """Cheap LLM sanity-checks the proposed fix before we pay for Docker."""
     if not state.get("fixes"):
         return {"critic_feedback": "", "llm_calls": state.get("llm_calls", 0)}
-    changes = "".join(
-        f"\n### {f['filename']} (proposed new content)\n```\n{f['content'][:4000]}\n```\n"
-        for f in state["fixes"]
-    )
+    def _fix_preview(f):
+        if "search" in f:
+            return (f"\n### {f['filename']} (search/replace)\n"
+                    f"FIND:\n```\n{f['search']}\n```\n"
+                    f"REPLACE WITH:\n```\n{f['replace']}\n```\n")
+        return f"\n### {f['filename']} (new content)\n```\n{f.get('content', '')[:4000]}\n```\n"
+
+    changes = "".join(_fix_preview(f) for f in state["fixes"])
     prompt = (
         "You review a proposed CI auto-fix. Judge only: does the change plausibly "
         "address the diagnosed failure without unrelated edits?\n"
