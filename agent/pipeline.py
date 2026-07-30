@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 
@@ -18,6 +19,33 @@ from retrieval import select_context
 logger = logging.getLogger("sre-agent-webhook")
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+
+def _extract_failed_tests(output: str) -> set:
+    """Parse pytest output for FAILED test IDs."""
+    return set(re.findall(r"FAILED\s+([\w/.\\-]+::[\w_\[\]-]+)", output))
+
+
+def _augment_logs_with_regression(original_logs: str, fix_output: str) -> str:
+    """Extend the original failure log with what went wrong after the first fix attempt."""
+    original_failures = _extract_failed_tests(original_logs)
+    new_failures = _extract_failed_tests(fix_output)
+    regressions = new_failures - original_failures
+
+    if regressions:
+        reg_list = "\n".join(f"  - {t}" for t in sorted(regressions))
+        header = (
+            "\n\n## YOUR PREVIOUS FIX WAS APPLIED BUT CAUSED REGRESSIONS\n"
+            f"These tests were passing before your fix and now fail:\n{reg_list}\n\n"
+            "You must fix the original failure WITHOUT breaking these previously passing tests.\n\n"
+            f"Full output after your fix:\n{fix_output[-3000:]}"
+        )
+    else:
+        header = (
+            "\n\n## YOUR PREVIOUS FIX DID NOT RESOLVE THE FAILURE\n"
+            f"Output after applying your fix:\n{fix_output[-3000:]}"
+        )
+    return original_logs + header
 
 
 def _reset_workdir(workdir: str):
@@ -83,11 +111,14 @@ def _run_legacy(repo: str, branch: str, commit_sha: str, test_logs: str):
         # Attempt 1 = tiered context. If the fix doesn't turn the suite
         # green, attempt 2 retries with the full repo (legacy behavior).
         diagnosis, passed, incident_id = None, False, None
+        test_output, active_logs = "", test_logs
         for attempt in (1, 2):
             if attempt == 2:
+                # Tell the LLM what went wrong with its first fix
+                active_logs = _augment_logs_with_regression(test_logs, test_output)
                 if isinstance(context, dict):
                     break  # attempt 1 was already full-repo
-                logger.warning("Tiered-context fix failed — escalating to full repo")
+                logger.warning("Tiered-context fix failed — escalating to full repo with regression feedback")
                 _reset_workdir(workdir)
                 try:
                     clone_branch(repo, branch, workdir)
@@ -97,7 +128,7 @@ def _run_legacy(repo: str, branch: str, commit_sha: str, test_logs: str):
                 context = read_source_files(workdir)
 
             try:
-                result = call_llm(test_logs, context, incidents=incidents)
+                result = call_llm(active_logs, context, incidents=incidents)
             except Exception as e:
                 logger.error("LLM call failed: %s", e)
                 return

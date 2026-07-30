@@ -187,6 +187,23 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
     sig_paths = order(neighbors)[:sig_max]
 
     full = {p: contents.get(p, "") for p in full_paths}
+
+    # Include the actual failing test files so the LLM sees what assertions need to pass.
+    # Capped at 2 files to keep context budget reasonable.
+    _TEST_FULL_MAX = 2
+    test_file_hits = [
+        p for p in hits.files
+        if p in files and files[p]["is_test"]
+    ][:_TEST_FULL_MAX]
+    for path in test_file_hits:
+        try:
+            with open(os.path.join(clone_path, path), encoding="utf-8", errors="replace") as f:
+                full[path] = f.read()
+        except OSError:
+            pass
+    if test_file_hits:
+        logger.info("Added %d failing test file(s) to full context: %s", len(test_file_hits), test_file_hits)
+
     signatures = {p: _signature_block(source_files[p]) for p in sig_paths if source_files[p]["symbols"]}
     overview = {
         p: _overview_line(e)
