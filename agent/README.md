@@ -91,7 +91,7 @@ python dashboard.py            # http://127.0.0.1:8001/ui
 | `OPENROUTER_API_KEY` | yes | Model access. Get one at openrouter.ai. |
 | `WEBHOOK_SECRET` | for CI | Shared secret GitHub Actions sends as `X-Webhook-Secret`. |
 | `GITHUB_TOKEN` | to open PRs | Classic PAT with the `repo` scope, or a fine-grained token with Contents and Pull requests write on the target repo. Without it the agent still fixes and validates, then logs "skipping push and PR". |
-| `LLM_MODEL` | no | Default `tencent/hy3-preview`. Any OpenRouter model id works, including free ones such as `inclusionai/ling-3.0-flash:free`. |
+| `LLM_MODEL` | no | Default `tencent/hy3-preview`. Any OpenRouter model id works, including free ones such as `poolside/laguna-s-2.1:free`. |
 | `TRIAGE_MODEL` | no | Cheaper model for the triage and review nodes. Falls back to `LLM_MODEL`. |
 | `AGENT_MODE` | no | `legacy` (default) or `graph` for the nine-node LangGraph pipeline. |
 | `MEMORY_DB` | no | SQLite path. Default `~/.sre-agent/memory.db`. |
@@ -318,6 +318,7 @@ console as access to the source of whatever repo the agent watches.
 | CI posts, server returns 422 | Old uvicorn h11 parser mishandling `Expect: 100-continue`. `main.py` already runs `http="httptools"`; make sure `uvicorn[standard]` is installed. |
 | Fixes always report red, tests pass by hand | Docker is missing, stopped, or the service user is not in the `docker` group. |
 | `HTTP 402 Payment Required` in the logs | OpenRouter balance exhausted. Switch `LLM_MODEL` to a `:free` model or top up. |
+| `404 ... unavailable for free`, every node falls back and the run gives up | A `:free` slug stopped being free. OpenRouter retires them without notice, so pick another from `https://openrouter.ai/api/v1/models` (filter ids ending in `:free`) and smoke test it before deploying. |
 | Agent fixes the suite but opens no PR | `GITHUB_TOKEN` unset or lacking the `repo` scope. The log says "skipping push and PR". |
 | Console is empty | No runs recorded yet in that `MEMORY_DB`. Only runs executed after the run tracker was added appear; older history lives in the `incidents` table, which the console does not read. |
 | Console 401s in a browser on the VM | It is bound to a routable interface, so a secret is required. Use the SSH tunnel above. |
