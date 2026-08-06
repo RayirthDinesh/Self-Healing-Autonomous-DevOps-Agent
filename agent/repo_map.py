@@ -1,4 +1,4 @@
-"""Repo map — tree-sitter symbol graph over a cloned repo, cached per commit.
+"""Repo map - tree-sitter symbol graph over a cloned repo, cached per commit.
 
 Built once per (repo, commit) and cached on disk, so the agent has structural
 awareness of any repo it is pointed at without re-parsing on every failure.

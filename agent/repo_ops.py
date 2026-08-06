@@ -1,4 +1,4 @@
-"""Repository operations — clone, read source files, apply fixes, run tests, push."""
+"""Repository operations - clone, read source files, apply fixes, run tests, push."""
 
 import logging
 import os
@@ -47,23 +47,23 @@ def apply_fixes(repo_path: str, fixes: list):
     """Apply each fix to the cloned repo.
 
     Supports two formats from the LLM:
-      search/replace — find an exact block and swap only those lines (preferred).
+      search/replace - find an exact block and swap only those lines (preferred).
                        Leaves the rest of the file completely untouched.
-      content        — full file overwrite (fallback for new files or total rewrites).
+      content        - full file overwrite (fallback for new files or total rewrites).
     """
     for fix in fixes:
         filepath = os.path.join(repo_path, fix["filename"])
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
 
         if "search" in fix and "replace" in fix:
-            # Targeted edit — only touch the lines that need to change
+            # Targeted edit - only touch the lines that need to change
             try:
                 with open(filepath, encoding="utf-8") as f:
                     original = f.read()
                 search_text = fix["search"]
                 if search_text not in original:
                     logger.error(
-                        "apply_fixes: search block not found in %s — skipping",
+                        "apply_fixes: search block not found in %s - skipping",
                         fix["filename"],
                     )
                     continue
@@ -79,7 +79,7 @@ def apply_fixes(repo_path: str, fixes: list):
                 f.write(fix["content"])
             logger.info("Applied full-file fix to %s", fix["filename"])
         else:
-            logger.warning("apply_fixes: fix for %s has neither search/replace nor content — skipping", fix["filename"])
+            logger.warning("apply_fixes: fix for %s has neither search/replace nor content - skipping", fix["filename"])
 
 
 def run_tests(repo_path: str) -> tuple:
@@ -124,11 +124,11 @@ def run_static_analysis(repo_path: str) -> tuple:
     """Run flake8 on the fixed repo in ~1 second before the 60-second Docker run.
 
     Only checks for errors that guarantee test failure:
-      E9xx — syntax errors, bad encoding
-      F821 — undefined name
-      F823 — undefined local variable
+      E9xx - syntax errors, bad encoding
+      F821 - undefined name
+      F823 - undefined local variable
 
-    Style warnings are ignored — we only care about hard failures.
+    Style warnings are ignored - we only care about hard failures.
     Returns (passed: bool, output: str). Never raises: if flake8 is missing,
     returns (True, "") so the pipeline falls through to Docker unchanged.
     """
@@ -140,12 +140,12 @@ def run_static_analysis(repo_path: str) -> tuple:
         output = result.stdout + result.stderr
         passed = result.returncode == 0
         if passed:
-            logger.info("Static analysis passed — proceeding to Docker")
+            logger.info("Static analysis passed - proceeding to Docker")
         else:
             logger.warning("Static analysis caught errors (skipping Docker):\n%s", output)
         return passed, output
     except Exception as e:
-        logger.warning("flake8 unavailable (%s) — skipping static analysis", e)
+        logger.warning("flake8 unavailable (%s) - skipping static analysis", e)
         return True, ""
 
 

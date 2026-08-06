@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import BackgroundTasks, FastAPI, Request
 
+import dashboard
 from models import WebhookPayload
 from pipeline import run as run_pipeline
 
@@ -39,16 +40,25 @@ logger = logging.getLogger("sre-agent-webhook")
 app = FastAPI(title="Self-Healing SRE Agent Webhook")
 
 
+app.include_router(dashboard.router)
+
+
 @app.middleware("http")
 async def verify_secret(request: Request, call_next):
     """Authenticate every request via the X-Webhook-Secret header.
 
-    /health is exempt so uptime checks don't need the secret. Any other path
-    must present a header matching WEBHOOK_SECRET, otherwise we return 401.
+    /health is exempt so uptime checks don't need the secret. Dashboard routes
+    authenticate the same secret via header, ?key= or the sre_key cookie (see
+    dashboard.secret_ok) so a browser can reach them. Everything else must
+    present the header, otherwise we return 401.
     """
-    if request.url.path != "/health":
-        provided = request.headers.get("X-Webhook-Secret")
-        if not WEBHOOK_SECRET or provided != WEBHOOK_SECRET:
+    path = request.url.path
+    if path != "/health":
+        if path == "/ui" or path.startswith("/api/"):
+            ok = dashboard.secret_ok(request)
+        else:
+            ok = bool(WEBHOOK_SECRET) and request.headers.get("X-Webhook-Secret") == WEBHOOK_SECRET
+        if not ok:
             logger.warning("Rejected request to %s: bad webhook secret", request.url.path)
             # Returned as JSON via a small inline response to keep middleware simple.
             from fastapi.responses import JSONResponse
@@ -59,7 +69,7 @@ async def verify_secret(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    """Liveness probe — confirms the server process is up and serving."""
+    """Liveness probe - confirms the server process is up and serving."""
     return {"status": "ok"}
 
 
@@ -79,7 +89,7 @@ def webhook(payload: WebhookPayload, background_tasks: BackgroundTasks):
     )
 
     if payload.status == "failure":
-        logger.info("CI failure on %s — starting agent pipeline", payload.branch)
+        logger.info("CI failure on %s - starting agent pipeline", payload.branch)
         # BackgroundTasks: FastAPI sends the HTTP response right now, then
         # runs this function after. The pipeline can take 60-90 seconds;
         # without this, GitHub would time out waiting for a response.
@@ -92,7 +102,7 @@ def webhook(payload: WebhookPayload, background_tasks: BackgroundTasks):
         )
         return {"received": True, "action": "agent pipeline started"}
 
-    logger.info("CI success on %s (%s) — no action needed", payload.branch, payload.commit_sha)
+    logger.info("CI success on %s (%s) - no action needed", payload.branch, payload.commit_sha)
     return {"received": True, "action": "no action needed"}
 
 

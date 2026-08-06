@@ -1,9 +1,9 @@
 """Error-triggered context retrieval.
 
 Given a failing CI log and the repo map, select which files the LLM sees:
-  FULL       — files implicated by the traceback (highest precision signal)
-  SIGNATURES — 1-hop import-graph neighbors + BM25 runners-up
-  OVERVIEW   — one line per remaining file, so the model knows the terrain
+  FULL       - files implicated by the traceback (highest precision signal)
+  SIGNATURES - 1-hop import-graph neighbors + BM25 runners-up
+  OVERVIEW   - one line per remaining file, so the model knows the terrain
 """
 
 import logging
@@ -95,7 +95,7 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
                    blame: dict = None) -> TieredContext:
     """Assemble the tiered LLM context for one failure.
 
-    blame — optional {path: weight in [0,1]} prior from memory: files that
+    blame - optional {path: weight in [0,1]} prior from memory: files that
     historically fixed this error class rank higher.
     """
     started = time.monotonic()
@@ -144,13 +144,13 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
     bm25_max = max(bm25_raw.values(), default=1.0) or 1.0
     scores = {p: v / bm25_max for p, v in bm25_raw.items()}
 
-    # Chunk-level semantic scores — embed each function separately, take best per file
+    # Chunk-level semantic scores - embed each function separately, take best per file
     if _EMBEDDINGS_AVAILABLE:
         try:
             file_chunks = _chunks_for_repo(contents, repo_map["files"])
             sem = _chunk_scores(test_logs[-2000:], file_chunks)
         except Exception as e:
-            logger.warning("Semantic scoring failed (%s) — using BM25 only", e)
+            logger.warning("Semantic scoring failed (%s) - using BM25 only", e)
             sem = {}
     else:
         sem = {}

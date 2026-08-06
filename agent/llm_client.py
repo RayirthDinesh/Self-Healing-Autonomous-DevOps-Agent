@@ -1,10 +1,13 @@
-"""LLM client — sends broken test output + source code to OpenRouter and gets a fix back."""
+"""LLM client - sends broken test output + source code to OpenRouter and gets a fix back."""
 
 import json
 import logging
 import os
+import time
 
 import requests
+
+import run_tracker
 
 logger = logging.getLogger("sre-agent-webhook")
 
@@ -12,13 +15,13 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = os.getenv("LLM_MODEL", "tencent/hy3-preview")
 
 
-_JSON_CONTRACT = """Respond with raw JSON only — no markdown, no explanation outside the JSON:
+_JSON_CONTRACT = """Respond with raw JSON only - no markdown, no explanation outside the JSON:
 {
   "diagnosis": "one sentence describing the root cause of the failure",
   "fixes": [
     {
       "filename": "relative/path/to/file",
-      "search": "exact lines from the file to replace — copy verbatim, including indentation",
+      "search": "exact lines from the file to replace - copy verbatim, including indentation",
       "replace": "the corrected lines that replace the search block"
     }
   ]
@@ -26,7 +29,7 @@ _JSON_CONTRACT = """Respond with raw JSON only — no markdown, no explanation o
 
 Rules for fixes:
 - Use "search" + "replace" for targeted edits. Copy the search lines EXACTLY as they appear
-  in the file — same indentation, same whitespace. The search must match uniquely.
+  in the file - same indentation, same whitespace. The search must match uniquely.
 - Only include files that actually need to change.
 - If requirements.txt is the problem, include that too."""
 
@@ -37,13 +40,13 @@ def _incidents_section(incidents) -> str:
         return ""
     parts = [
         "\n## Past incidents in this repo\n"
-        "Past incidents are historical hints — the current bug may differ. "
+        "Past incidents are historical hints - the current bug may differ. "
         "Verify against the code shown.\n"
     ]
     for inc in incidents:
         files = ", ".join(inc.get("files_fixed", []))
         parts.append(
-            f"\n### {inc.get('error_class', 'incident')} — fixed {files}\n"
+            f"\n### {inc.get('error_class', 'incident')} - fixed {files}\n"
             f"Diagnosis: {inc.get('diagnosis', '')}\n"
             f"```diff\n{inc.get('fix_diff', '')}\n```\n"
         )
@@ -96,6 +99,7 @@ def call_llm(test_logs: str, context, incidents=None) -> dict:
 
     logger.info("Calling LLM (%s) to diagnose failure...", MODEL)
 
+    started = time.time()
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -112,6 +116,7 @@ def call_llm(test_logs: str, context, incidents=None) -> dict:
     response.raise_for_status()
 
     raw = response.json()["choices"][0]["message"]["content"].strip()
+    run_tracker.llm_call(MODEL, prompt, raw, (time.time() - started) * 1000)
 
     # Strip markdown code fences if the model wrapped the JSON anyway
     if raw.startswith("```"):

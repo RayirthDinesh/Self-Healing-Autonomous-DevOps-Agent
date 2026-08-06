@@ -1,4 +1,4 @@
-# Phase 1 — Persistent Memory for the SRE Agent
+# Phase 1 - Persistent Memory for the SRE Agent
 
 Date: 2026-07-16
 Status: approved (design conversation + AskUserQuestion decisions), implementing
@@ -15,7 +15,7 @@ Phase 2 (LangGraph multi-agent rework) will consume for its error-class fast-pat
 - Build order: **memory first, then LangGraph**.
 - Storage: **SQLite on the VM** at `~/.sre-agent/memory.db` (override: `MEMORY_DB` env).
 - PR fate: **lazy check at the start of the next run** (no polling daemon).
-- Memory failures must **never kill a run** — every hook degrades to current behavior.
+- Memory failures must **never kill a run** - every hook degrades to current behavior.
 
 ## Schema (`agent/memory.py`)
 
@@ -52,11 +52,11 @@ Regex buckets over the failing log: `name-error`, `import-error`, `type-error`,
 
 ## Prompt integration (`llm_client.py`)
 
-`call_llm(test_logs, context, incidents=None)` — when `similar_incidents()` returns
+`call_llm(test_logs, context, incidents=None)` - when `similar_incidents()` returns
 matches (cosine ≥ 0.55, cap 2, diffs trimmed to ≤ 40 lines, `pr_state='closed'`
 excluded, only `suite_green=1`), a `## Past incidents in this repo` block is inserted
 after the Failed Test Output with the guard sentence:
-*"Past incidents are historical hints — the current bug may differ. Verify against the code shown."*
+*"Past incidents are historical hints - the current bug may differ. Verify against the code shown."*
 Fallback when embeddings unavailable: match on same error class, most recent first.
 
 ## Pipeline hooks (`pipeline.py`)

@@ -15,6 +15,7 @@ import time
 from langgraph.graph import END, StateGraph
 
 import graph_nodes as nodes
+import run_tracker
 from graph_state import AgentState
 from repo_ops import clone_branch
 
@@ -51,7 +52,7 @@ def build_graph(checkpointer=None):
 
 
 def _checkpointer():
-    """SqliteSaver when available — optional, never blocks a run."""
+    """SqliteSaver when available - optional, never blocks a run."""
     try:
         import sqlite3
         from langgraph.checkpoint.sqlite import SqliteSaver
@@ -63,15 +64,21 @@ def _checkpointer():
         return None
 
 
-def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str):
-    """Graph-mode equivalent of pipeline.run — same inputs, same side effects."""
+def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str,
+              source: str = "webhook"):
+    """Graph-mode equivalent of pipeline.run - same inputs, same side effects."""
     logger.info("=== Graph pipeline started | branch=%s commit=%s ===", branch, commit_sha)
+    run_tracker.start_run(repo, branch, commit_sha, source=source, mode="graph")
+    run_tracker.artifact("ci_logs", "failing CI output", test_logs)
     with tempfile.TemporaryDirectory() as workdir:
         try:
             clone_branch(repo, branch, workdir)
         except Exception as e:
             logger.error("Clone failed: %s", e)
+            run_tracker.step("clone", status="error", detail={"error": str(e)})
+            run_tracker.finish_run("error", "clone_failed")
             return
+        run_tracker.step("clone", detail={"workdir": workdir})
 
         app = build_graph(_checkpointer())
         state: AgentState = {
@@ -92,11 +99,19 @@ def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str):
             })
         except Exception as e:
             logger.error("Graph run failed: %s", e)
+            run_tracker.finish_run("error", f"{type(e).__name__}: {e}")
             return
         logger.info(
             "=== Graph pipeline complete | outcome=%s attempts=%d llm_calls=%d%s ===",
             final.get("done", "unknown"), final.get("attempt", 0),
             final.get("llm_calls", 0),
             f" | PR: {final['pr_url']}" if final.get("pr_url") else "",
+        )
+        run_tracker.finish_run(
+            "passed" if final.get("passed") else "failed",
+            final.get("done", "unknown"),
+            pr_url=final.get("pr_url", ""),
+            attempts=final.get("attempt", 0),
+            llm_calls=final.get("llm_calls", 0),
         )
         return final
