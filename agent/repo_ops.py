@@ -109,23 +109,65 @@ def get_diff(repo_path: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-def commit_and_push(repo_path: str, fix_branch: str, github_token: str, repo: str):
-    """Create a new branch in the clone, commit the fix, push it to GitHub."""
-    env = os.environ.copy()
+def _git(args: list, cwd: str, secret: str = "") -> subprocess.CompletedProcess:
+    """Run git, and never let the token reach an exception, a log or the console.
 
-    subprocess.run(["git", "config", "user.email", "sre-agent@auto.fix"], cwd=repo_path, check=True)
-    subprocess.run(["git", "config", "user.name", "SRE Agent"], cwd=repo_path, check=True)
-    subprocess.run(["git", "config", "core.fileMode", "false"], cwd=repo_path, check=True)
+    The push URL carries the PAT, and CalledProcessError puts the whole command
+    in its message - which then lands in the server log, in journalctl and in
+    the publisher event the dashboard serves.
+    """
+    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = _redact((result.stderr or result.stdout or "").strip(), secret)
+        raise RuntimeError(f"git {args[1]} failed: {detail[-500:]}")
+    return result
 
-    subprocess.run(["git", "checkout", "-b", fix_branch], cwd=repo_path, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=repo_path, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", f"fix: auto-fix applied by SRE Agent on {fix_branch}"],
-        cwd=repo_path,
-        check=True,
-    )
+
+def _redact(text: str, secret: str) -> str:
+    return text.replace(secret, "***") if secret else text
+
+
+def _unique_branch(auth_url: str, fix_branch: str, repo_path: str, token: str) -> str:
+    """Pick a branch name that does not exist on the remote yet.
+
+    The name is derived from the failing branch and its commit, so re-running
+    the same failure - a retried CI job, a second push of the same commit -
+    produces the same name and git rejects it as a non-fast-forward. A green
+    fix would then never reach a PR. Suffix instead of force-pushing: the
+    existing branch may have an open PR a human is already reviewing.
+    """
+    try:
+        listing = _git(["git", "ls-remote", "--heads", auth_url,
+                        f"refs/heads/{fix_branch}*"], repo_path, token).stdout
+    except RuntimeError as e:
+        logger.warning("Could not list remote branches (%s) - using %s as is", e, fix_branch)
+        return fix_branch
+    taken = {line.rsplit("refs/heads/", 1)[-1] for line in listing.splitlines() if line.strip()}
+    if fix_branch not in taken:
+        return fix_branch
+    for n in range(2, 100):
+        candidate = f"{fix_branch}-{n}"
+        if candidate not in taken:
+            logger.info("%s already on the remote - pushing %s instead", fix_branch, candidate)
+            return candidate
+    raise RuntimeError(f"{fix_branch} and 98 suffixed variants all exist on the remote")
+
+
+def commit_and_push(repo_path: str, fix_branch: str, github_token: str, repo: str) -> str:
+    """Create a branch in the clone, commit the fix, push it. Returns the branch
+    actually pushed, which may carry a suffix if the first choice was taken."""
+    _git(["git", "config", "user.email", "sre-agent@auto.fix"], repo_path)
+    _git(["git", "config", "user.name", "SRE Agent"], repo_path)
+    _git(["git", "config", "core.fileMode", "false"], repo_path)
 
     # Embed the token in the remote URL so git can authenticate without a prompt
     auth_url = f"https://x-access-token:{github_token}@github.com/{repo}.git"
-    subprocess.run(["git", "push", auth_url, fix_branch], cwd=repo_path, check=True)
+    fix_branch = _unique_branch(auth_url, fix_branch, repo_path, github_token)
+
+    _git(["git", "checkout", "-b", fix_branch], repo_path)
+    _git(["git", "add", "-A"], repo_path)
+    _git(["git", "commit", "-m", f"fix: auto-fix applied by SRE Agent on {fix_branch}"],
+         repo_path)
+    _git(["git", "push", auth_url, fix_branch], repo_path, github_token)
     logger.info("Pushed fix branch %s to GitHub", fix_branch)
+    return fix_branch

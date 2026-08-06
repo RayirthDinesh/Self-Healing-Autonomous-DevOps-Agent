@@ -459,7 +459,8 @@ def publisher(state):
     safe_branch = state["branch"].replace("/", "-")
     fix_branch = f"autofix/{safe_branch}-{state['commit_sha'][:7]}"
     try:
-        commit_and_push(state["workdir"], fix_branch, token, state["repo"])
+        # commit_and_push may suffix the name if the remote already has it
+        fix_branch = commit_and_push(state["workdir"], fix_branch, token, state["repo"])
         pr_url = create_pull_request(
             token=token, repo=state["repo"], head=fix_branch, base="main",
             title=f"[Auto-fix] {state.get('diagnosis', 'automated fix')}",
