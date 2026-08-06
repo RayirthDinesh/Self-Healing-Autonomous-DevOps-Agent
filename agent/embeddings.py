@@ -1,4 +1,4 @@
-"""Semantic embeddings for code retrieval — ONNX via fastembed, no GPU needed."""
+"""Semantic embeddings for code retrieval - ONNX via fastembed, no GPU needed."""
 
 import hashlib
 import logging
@@ -53,11 +53,11 @@ def semantic_scores(query: str, corpus: dict) -> dict:
 def chunk_scores(query: str, file_chunks: dict) -> dict:
     """Return {path: best_chunk_cosine_similarity} using function-level chunks.
 
-    file_chunks — {path: [chunk_dict, ...]} from chunker.chunks_for_repo()
+    file_chunks - {path: [chunk_dict, ...]} from chunker.chunks_for_repo()
 
     For each file we embed every function separately and take the MAX similarity
     across all its chunks. A file scores high if even one of its functions is
-    semantically close to the error — much more precise than averaging the whole
+    semantically close to the error - much more precise than averaging the whole
     file together.
     """
     query_vec = embed(query)

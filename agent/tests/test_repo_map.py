@@ -1,4 +1,4 @@
-"""Tests for repo_map — tree-sitter symbol extraction, import graph, cache."""
+"""Tests for repo_map - tree-sitter symbol extraction, import graph, cache."""
 
 import json
 import textwrap
@@ -86,7 +86,7 @@ def test_test_files_parsed_but_flagged(mini_repo):
 
 def test_pagerank_favors_imported_file(mini_repo):
     m = build_map("o/r", "sha1", str(mini_repo))
-    # core.py is imported by app.py and the test — most central file
+    # core.py is imported by app.py and the test - most central file
     assert m["rank"]["src/core.py"] == max(m["rank"].values())
 
 

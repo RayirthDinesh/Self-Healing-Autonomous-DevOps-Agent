@@ -14,7 +14,7 @@ The flow being built:
 Oracle Cloud Console → **Compute → Instances → Create**:
 
 - **Image:** Canonical Ubuntu 22.04
-- **Shape:** `VM.Standard.A1.Flex` (Ampere ARM), 1 OCPU / 6 GB — must show
+- **Shape:** `VM.Standard.A1.Flex` (Ampere ARM), 1 OCPU / 6 GB - must show
   **"Always Free-eligible"**. If "out of capacity", try another Availability
   Domain or the AMD `VM.Standard.E2.1.Micro`.
 - **Networking:** create a new VCN + **public subnet**.
@@ -40,7 +40,7 @@ Note the public IP (referred to below as `<EC2_IP>`).
 
 ## 2. Open port 8000 (TWO firewalls)
 
-Both are required — the cloud firewall *and* the VM's own iptables.
+Both are required - the cloud firewall *and* the VM's own iptables.
 
 ### a) Oracle Security List (cloud firewall)
 
@@ -51,11 +51,11 @@ Subnet → **Security Lists → Default Security List → Add Ingress Rules**:
 - IP Protocol: **TCP**
 - Destination Port Range: `8000`
 
-### b) VM iptables — **must sit before the REJECT**
+### b) VM iptables - **must sit before the REJECT**
 
 Oracle Ubuntu images ship an iptables ruleset ending in a catch-all REJECT.
 A naive append lands *after* it and does nothing. Insert *before* the REJECT
-(it was line 5 on a fresh image — check with `-L --line-numbers`):
+(it was line 5 on a fresh image - check with `-L --line-numbers`):
 
 ```bash
 sudo iptables -I INPUT 5 -p tcp --dport 8000 -j ACCEPT
@@ -93,11 +93,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### .env — write it WITHOUT a BOM
+### .env - write it WITHOUT a BOM
 
 `load_dotenv()` reads `WEBHOOK_SECRET` from `.env`. A UTF-8 BOM makes the key
 parse as `﻿WEBHOOK_SECRET`, so the real var stays unset and every request
-401s. PowerShell `Set-Content -Encoding utf8` adds a BOM — use Linux `printf`
+401s. PowerShell `Set-Content -Encoding utf8` adds a BOM - use Linux `printf`
 on the box instead:
 
 ```bash
@@ -151,7 +151,7 @@ Repo → **Settings → Secrets and variables → Actions** → add **both**:
 | `WEBHOOK_URL` | `http://<EC2_IP>:8000/webhook` |
 | `WEBHOOK_SECRET` | same string as the box `.env` |
 
-Both are required — the workflow sends `X-Webhook-Secret`, and the server 401s
+Both are required - the workflow sends `X-Webhook-Secret`, and the server 401s
 without a match.
 
 > **Watch for trailing newlines.** If a secret value is saved with a trailing
@@ -170,7 +170,7 @@ without a match.
 
 `ci.yml` posts the payload with `curl`. For bodies > 1 KB (the pytest logs are
 several KB) curl adds `Expect: 100-continue`. uvicorn's **default h11 parser
-mishandles this over real network latency** — the body arrives after uvicorn
+mishandles this over real network latency** - the body arrives after uvicorn
 has already replied, so FastAPI sees an empty body and returns **422
 Unprocessable Entity** (with `Invalid HTTP request received` in the log). It
 works fine from localhost because there's no latency to expose the race.
@@ -180,7 +180,7 @@ Fix is server-side and client-agnostic: use the **httptools** parser.
 `main.py` runs `uvicorn.run(..., http="httptools")`. httptools handles the
 `Expect: 100-continue` handshake correctly, so no client-side change is needed.
 
-> Do **not** try to "fix" this with `curl -H "Expect:"` — curl emits that as an
+> Do **not** try to "fix" this with `curl -H "Expect:"` - curl emits that as an
 > empty-value `Expect:` header, which httptools rejects as malformed HTTP
 > ("Invalid HTTP request received", no access-log line). httptools alone is the
 > fix; the workflow's curl sends no Expect override.
@@ -210,7 +210,7 @@ curl -sS -X POST http://<EC2_IP>:8000/webhook \
 - **Public IP changes** on instance stop/start. Either keep it running or
   attach a **Reserved (static) public IP**, then update the `WEBHOOK_URL`
   secret.
-- Plain HTTP — the secret travels in a cleartext header. Fine for a portfolio
+- Plain HTTP - the secret travels in a cleartext header. Fine for a portfolio
   demo; for real use, front it with HTTPS (nginx/Caddy + Let's Encrypt).
 - `Invalid HTTP request received` lines with no client IP are internet bots
-  probing port 8000 — harmless noise, not CI traffic.
+  probing port 8000 - harmless noise, not CI traffic.

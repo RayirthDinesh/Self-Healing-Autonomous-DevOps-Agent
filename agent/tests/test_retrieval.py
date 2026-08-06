@@ -1,4 +1,4 @@
-"""Tests for retrieval — log parsing, graph walk, BM25 ranking, tier assembly."""
+"""Tests for retrieval - log parsing, graph walk, BM25 ranking, tier assembly."""
 
 import textwrap
 

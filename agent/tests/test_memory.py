@@ -1,4 +1,4 @@
-"""Tests for the SQLite memory — error classes, incidents, PR fates, blame."""
+"""Tests for the SQLite memory - error classes, incidents, PR fates, blame."""
 
 import json
 

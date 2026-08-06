@@ -39,8 +39,8 @@ def extract_chunks(path: str, content: str, symbols: list) -> list:
 def chunks_for_repo(source_files: dict, repo_map_files: dict) -> dict:
     """Build {path: [chunk, ...]} for every source file.
 
-    source_files  — {path: content} from retrieval
-    repo_map_files — files sub-dict from get_repo_map(), carries symbols
+    source_files  - {path: content} from retrieval
+    repo_map_files - files sub-dict from get_repo_map(), carries symbols
     """
     result = {}
     for path, content in source_files.items():

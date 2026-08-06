@@ -1,4 +1,4 @@
-"""Persistent memory — SQLite mental map of the target repo plus incident history.
+"""Persistent memory - SQLite mental map of the target repo plus incident history.
 
 Everything here is advisory: a memory failure must never kill a pipeline run,
 so every public function degrades to a neutral value and logs a warning.
@@ -117,7 +117,7 @@ def _connect() -> sqlite3.Connection:
         os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
     conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
-    # Guarded migrations — each a no-op once the column exists
+    # Guarded migrations - each a no-op once the column exists
     for ddl in (
         "ALTER TABLE incidents ADD COLUMN signature TEXT",
         "ALTER TABLE incidents ADD COLUMN validator_output TEXT",
@@ -130,14 +130,14 @@ def _connect() -> sqlite3.Connection:
 
 
 def _never_fatal(default):
-    """Memory is advisory — log and return a neutral value on any failure."""
+    """Memory is advisory - log and return a neutral value on any failure."""
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                logger.warning("memory: %s failed (%s) — continuing without it", fn.__name__, e)
+                logger.warning("memory: %s failed (%s) - continuing without it", fn.__name__, e)
                 return default() if callable(default) else default
         return wrapper
     return deco
@@ -166,7 +166,7 @@ _TEST_FILE_RE = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)test_[^/]*$|_test\.[a
 def failure_signature(test_logs: str) -> str:
     """Composite fast-path key: error class + failing test files + traceback source.
 
-    Two failures with the same signature are 'the same bug shape' — the router
+    Two failures with the same signature are 'the same bug shape' - the router
     only skips triage/localization when this exact shape has merged before.
     """
     from retrieval import parse_failure_log
@@ -239,7 +239,7 @@ def record_incident(repo: str, branch: str, commit_sha: str, test_logs: str,
                     suite_green: bool, attempt: int, validator_output: str = ""):
     """Store one fix attempt that reached the test suite. Returns the incident id.
 
-    validator_output — tail of the post-fix test run, so a red incident is
+    validator_output - tail of the post-fix test run, so a red incident is
     diagnosable from the DB alone (infra flake vs genuinely wrong fix).
     """
     excerpt = test_logs[-_LOG_EXCERPT_CHARS:]

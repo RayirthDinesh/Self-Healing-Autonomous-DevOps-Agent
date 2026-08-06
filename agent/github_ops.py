@@ -1,4 +1,4 @@
-"""GitHub API operations — opens a pull request for the auto-fix branch."""
+"""GitHub API operations - opens a pull request for the auto-fix branch."""
 
 import logging
 
