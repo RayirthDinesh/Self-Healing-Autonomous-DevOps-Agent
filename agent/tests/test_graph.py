@@ -252,12 +252,26 @@ def test_routing_budget_rails():
          "fixes": [{"filename": "a", "content": "b"}]}) == "validator"
 
 
-def test_pipeline_dispatches_on_agent_mode(monkeypatch):
+@pytest.mark.parametrize("mode", ["graph", None])
+def test_pipeline_dispatches_to_graph_by_default(monkeypatch, mode):
     import pipeline
     seen = {}
-    monkeypatch.setenv("AGENT_MODE", "graph")
+    if mode is None:
+        monkeypatch.delenv("AGENT_MODE", raising=False)
+    else:
+        monkeypatch.setenv("AGENT_MODE", mode)
     import agent_graph
     monkeypatch.setattr(agent_graph, "run_graph",
+                        lambda *a: seen.setdefault("args", a))
+    pipeline.run("o/r", "b", "sha", "logs")
+    assert seen["args"] == ("o/r", "b", "sha", "logs")
+
+
+def test_pipeline_honours_legacy_opt_out(monkeypatch):
+    import pipeline
+    seen = {}
+    monkeypatch.setenv("AGENT_MODE", "legacy")
+    monkeypatch.setattr(pipeline, "_run_legacy",
                         lambda *a: seen.setdefault("args", a))
     pipeline.run("o/r", "b", "sha", "logs")
     assert seen["args"] == ("o/r", "b", "sha", "logs")

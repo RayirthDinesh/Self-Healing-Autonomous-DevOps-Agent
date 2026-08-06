@@ -8,8 +8,8 @@ Two access modes, chosen by where the server listens:
 
   local   bound to loopback, so only processes on this machine can reach it.
           No secret required. This is the default and the common case: every
-          pipeline (webhook, replay, SWE-bench) writes to the same SQLite file,
-          so a fresh clone sees its runs immediately.
+          pipeline (webhook, SWE-bench) writes to the same SQLite file, so a
+          fresh clone sees its runs immediately.
 
   exposed bound to a routable interface, or mounted into the webhook server in
           main.py. A secret is then mandatory, because the console serves repo
@@ -159,7 +159,7 @@ async def api_stream(request: Request, run_id: str):
     """Server-sent events: new events/artifacts for one run, then close.
 
     Polls SQLite rather than hooking the pipeline in-process, so it works even
-    when the run is happening in another process (replay script, harness).
+    when the run is happening in another process (webhook server, harness).
     """
     _require(request)
     if not run_tracker.get_run(run_id):

@@ -56,8 +56,8 @@ python agent/dashboard.py        # http://127.0.0.1:8001/ui
 ```
 
 It reads `~/.sre-agent/memory.db` (override with `MEMORY_DB`), so runs from the
-webhook server, `scripts/replay_bugs.py`, and the SWE-bench harness all appear.
-Point them at the same `MEMORY_DB` to see them in one place.
+webhook server and the SWE-bench harness both appear. Point them at the same
+`MEMORY_DB` to see them in one place.
 
 ### Access
 

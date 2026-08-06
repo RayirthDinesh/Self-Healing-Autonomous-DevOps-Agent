@@ -11,6 +11,9 @@ def wired(monkeypatch, tmp_path):
     """Stub every external effect; record what the pipeline did."""
     calls = {"llm_contexts": [], "test_results": [], "pushed": False, "pr": False}
 
+    # These cover the legacy path specifically; the graph is the default now
+    monkeypatch.setenv("AGENT_MODE", "legacy")
+
     # Memory writes to an isolated DB; no embedding model, no git diff subprocess
     monkeypatch.setenv("MEMORY_DB", str(tmp_path / "memory.db"))
     monkeypatch.setattr(memory, "_embed", lambda text: None)

@@ -16,13 +16,13 @@ def isolated_db(tmp_path, monkeypatch):
 
 
 def test_run_lifecycle_records_status_and_outcome():
-    run_id = run_tracker.start_run("acme/app", "bug/x", "abc1234", source="replay")
+    run_id = run_tracker.start_run("acme/app", "bug/x", "abc1234", source="webhook")
     assert run_tracker.current_run() == run_id
 
     run = run_tracker.get_run(run_id)
     assert run["status"] == "running"
     assert run["repo"] == "acme/app"
-    assert run["source"] == "replay"
+    assert run["source"] == "webhook"
     assert run["finished_at"] is None
 
     run_tracker.finish_run("passed", "published", pr_url="https://pr/1", attempts=2)

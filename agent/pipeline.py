@@ -69,13 +69,20 @@ def _reset_workdir(workdir: str):
 
 
 def run(repo: str, branch: str, commit_sha: str, test_logs: str):
-    """Dispatch: AGENT_MODE=graph -> LangGraph multi-agent, else legacy pipeline."""
+    """Dispatch: AGENT_MODE=legacy -> single-shot pipeline, else the graph.
+
+    The graph is the default because it is what the docs, the console and every
+    screenshot describe. Leaving legacy as the default meant a fresh clone
+    silently ran a different pipeline (no router, triage, localizer or critic)
+    than the one being demonstrated.
+    """
     try:
-        if os.getenv("AGENT_MODE", "legacy").lower() == "graph":
+        if os.getenv("AGENT_MODE", "graph").lower() != "legacy":
             try:
                 from agent_graph import run_graph
             except Exception as e:
-                logger.error("AGENT_MODE=graph but LangGraph unavailable (%s) - using legacy", e)
+                logger.error("LangGraph unavailable (%s) - falling back to the "
+                             "legacy pipeline; run pip install -r requirements.txt", e)
             else:
                 return run_graph(repo, branch, commit_sha, test_logs)
         return _run_legacy(repo, branch, commit_sha, test_logs)

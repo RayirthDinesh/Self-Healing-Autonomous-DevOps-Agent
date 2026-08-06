@@ -64,17 +64,41 @@ container. Without it every attempt reports red and nothing is ever published.
 docker run --rm python:3.11-slim python -c "print('docker ok')"
 ```
 
-Create `agent/.env` (see the reference below), then replay a known bug end to
-end against the demo repo:
+Create `agent/.env` (see the reference below), then start the server:
 
 ```bash
-python scripts/replay_bugs.py --branch bug/easy-1-nameerror --live
+python main.py                 # webhook server on :8000
 ```
 
-`--live` calls the model and validates the fix. Without it you get retrieval
-only and no model spend.
+Give it a real run. There is no simulation mode: the only way in is the same
+`/webhook` payload GitHub Actions posts, carrying real pytest output. Capture
+some from a branch that genuinely fails, then post it:
 
-Then start the console and watch what happened:
+```bash
+git clone -b bug/easy-1-nameerror https://github.com/RayirthDinesh/sre-demo-app /tmp/demo
+(cd /tmp/demo && pytest -v --tb=long > run.log 2>&1)
+
+python3 - > payload.json <<'PY'
+import json, subprocess
+sha = subprocess.run(["git", "-C", "/tmp/demo", "rev-parse", "HEAD"],
+                     capture_output=True, text=True).stdout.strip()
+print(json.dumps({
+    "repo": "RayirthDinesh/sre-demo-app",
+    "branch": "bug/easy-1-nameerror",
+    "commit_sha": sha,
+    "test_logs": open("/tmp/demo/run.log").read(),
+    "status": "failure",
+}))
+PY
+
+curl -sS -X POST http://127.0.0.1:8000/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+  -d @payload.json
+```
+
+From there it is the production path: clone, map, patch, validate in Docker,
+and a PR if `GITHUB_TOKEN` is set. Watch it happen in the console:
 
 ```bash
 python dashboard.py            # http://127.0.0.1:8001/ui
@@ -93,7 +117,7 @@ python dashboard.py            # http://127.0.0.1:8001/ui
 | `GITHUB_TOKEN` | to open PRs | Classic PAT with the `repo` scope, or a fine-grained token with Contents and Pull requests write on the target repo. Without it the agent still fixes and validates, then logs "skipping push and PR". |
 | `LLM_MODEL` | no | Default `tencent/hy3-preview`. Any OpenRouter model id works, including free ones such as `inclusionai/ling-3.0-flash:free`. |
 | `TRIAGE_MODEL` | no | Cheaper model for the triage and review nodes. Falls back to `LLM_MODEL`. |
-| `AGENT_MODE` | no | `legacy` (default) or `graph` for the nine-node LangGraph pipeline. |
+| `AGENT_MODE` | no | `graph` (default) for the nine-node LangGraph pipeline, or `legacy` for the single-shot one. If LangGraph is not installed the graph falls back to legacy and says so in the log. |
 | `MEMORY_DB` | no | SQLite path. Default `~/.sre-agent/memory.db`. |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` | no | Console bind. Default `127.0.0.1:8001`. |
 | `DASHBOARD_SECRET` | when exposed | Read-only console secret. Falls back to `WEBHOOK_SECRET`. |
@@ -288,8 +312,8 @@ python agent/dashboard.py        # http://127.0.0.1:8001/ui
 ```
 
 It reads the same SQLite file the pipeline writes, so runs from the webhook
-server, `scripts/replay_bugs.py` and the SWE-bench harness all appear, as long
-as they share a `MEMORY_DB`. It only shows runs recorded on that machine.
+server and the SWE-bench harness both appear, as long as they share a
+`MEMORY_DB`. It only shows runs recorded on that machine.
 
 **On the VM**, the console is already mounted on the webhook server at
 `http://<vm-ip>:8000/ui`, and there it requires a secret on every request.
