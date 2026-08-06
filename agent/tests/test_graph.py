@@ -62,10 +62,15 @@ def wired(monkeypatch, tmp_path):
                         lambda path: (calls["test_results"].pop(0), "suite output"))
     monkeypatch.setattr(graph_nodes, "clone_branch",
                         lambda repo, branch, dest: calls.__setitem__("cloned", calls["cloned"] + 1))
-    monkeypatch.setattr(graph_nodes, "commit_and_push",
-                        lambda *a, **k: calls.__setitem__("pushed", True))
+    def fake_push(workdir, fix_branch, token, repo):
+        calls["pushed"] = True
+        # the real one may suffix the name; the PR must follow what was pushed
+        return calls.get("push_returns", fix_branch)
+    monkeypatch.setattr(graph_nodes, "commit_and_push", fake_push)
     monkeypatch.setattr(graph_nodes, "create_pull_request",
-                        lambda **k: calls.__setitem__("pr", True) or "https://github.com/o/r/pull/7")
+                        lambda **k: calls.__setitem__("pr_head", k["head"])
+                        or calls.__setitem__("pr", True)
+                        or "https://github.com/o/r/pull/7")
 
     def invoke(extra=None):
         state = {"repo": "o/r", "branch": "bug/x", "commit_sha": "c0ffee1234567",
@@ -95,6 +100,18 @@ def test_happy_path_publishes(wired):
     for step in ("ingest", "router", "triage", "localizer", "fixer", "critic",
                  "validator", "publisher"):
         assert step in steps
+
+
+def test_pr_targets_the_branch_that_was_actually_pushed(wired):
+    """commit_and_push suffixes a name the remote already has; the PR must follow."""
+    wired["script"][:] = [TRIAGE, LOCATE, FIX, APPROVE]
+    wired["calls"]["test_results"][:] = [True]
+    wired["calls"]["push_returns"] = "autofix/bug-x-c0ffee1-2"
+
+    final = wired["invoke"]()
+
+    assert final["done"] == "published"
+    assert wired["calls"]["pr_head"] == "autofix/bug-x-c0ffee1-2"
 
 
 def test_red_attempts_exhaust_to_reflect(wired):
@@ -252,12 +269,26 @@ def test_routing_budget_rails():
          "fixes": [{"filename": "a", "content": "b"}]}) == "validator"
 
 
-def test_pipeline_dispatches_on_agent_mode(monkeypatch):
+def test_pipeline_hands_the_failure_to_the_graph(monkeypatch):
     import pipeline
     seen = {}
-    monkeypatch.setenv("AGENT_MODE", "graph")
-    import agent_graph
-    monkeypatch.setattr(agent_graph, "run_graph",
+    monkeypatch.setattr(pipeline, "run_graph",
                         lambda *a: seen.setdefault("args", a))
     pipeline.run("o/r", "b", "sha", "logs")
     assert seen["args"] == ("o/r", "b", "sha", "logs")
+
+
+def test_pipeline_closes_the_run_when_the_graph_raises(monkeypatch):
+    """A crash must not leave the console showing a run that is still running."""
+    import pipeline
+    closed = {}
+
+    def boom(*a):
+        raise RuntimeError("graph exploded")
+
+    monkeypatch.setattr(pipeline, "run_graph", boom)
+    monkeypatch.setattr(pipeline.run_tracker, "close_if_running",
+                        lambda outcome="": closed.setdefault("outcome", outcome))
+    with pytest.raises(RuntimeError):
+        pipeline.run("o/r", "b", "sha", "logs")
+    assert closed["outcome"] == "pipeline crashed"

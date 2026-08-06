@@ -33,7 +33,7 @@ _CRITIC_MAX_ROUNDS = 1
 
 class FileFix(BaseModel):
     filename: str
-    content: str = ""      # full file overwrite (legacy / new files)
+    content: str = ""      # full file overwrite (new files, total rewrites)
     search: str = ""       # exact block to find  (preferred targeted edit)
     replace: str = ""      # replacement for that block
 
@@ -451,7 +451,7 @@ def route_after_validator(state) -> str:
 
 @tracked("publisher", _sum_publisher)
 def publisher(state):
-    """Same publish contract as the legacy path: push autofix branch, open PR."""
+    """Push the autofix branch and open the PR."""
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         logger.warning("GITHUB_TOKEN not set - skipping push and PR")
@@ -459,7 +459,8 @@ def publisher(state):
     safe_branch = state["branch"].replace("/", "-")
     fix_branch = f"autofix/{safe_branch}-{state['commit_sha'][:7]}"
     try:
-        commit_and_push(state["workdir"], fix_branch, token, state["repo"])
+        # commit_and_push may suffix the name if the remote already has it
+        fix_branch = commit_and_push(state["workdir"], fix_branch, token, state["repo"])
         pr_url = create_pull_request(
             token=token, repo=state["repo"], head=fix_branch, base="main",
             title=f"[Auto-fix] {state.get('diagnosis', 'automated fix')}",

@@ -1020,7 +1020,6 @@ function viewRuns() {
         <select id="srcfilter">
           <option value="">all sources</option>
           <option value="webhook">webhook</option>
-          <option value="replay">replay</option>
           <option value="swebench">swebench</option>
         </select>
       </header>
@@ -1030,7 +1029,7 @@ function viewRuns() {
 }
 
 function runRows() {
-  if (!state.runs.length) return `<div class="empty"><b>No runs yet</b>Trigger a CI failure, or run the replay script.</div>`;
+  if (!state.runs.length) return `<div class="empty"><b>No runs yet</b>Trigger a CI failure on a watched branch.</div>`;
   return state.runs.map(r => `
     <button class="run" data-id="${r.id}" aria-selected="${r.id === state.runId}">
       <div class="l1">

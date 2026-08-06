@@ -1,6 +1,6 @@
 """Run tracking: the event log the dashboard reads.
 
-Every pipeline (graph, legacy, replay, SWE-bench) writes here; the dashboard
+Both entry points (the graph, the SWE-bench harness) write here; the dashboard
 never imports pipeline code, it just reads these tables. Same contract as
 memory.py: tracking is advisory and must never kill a fix, so every public
 function is wrapped in _never_fatal and degrades to a neutral value.
@@ -250,8 +250,8 @@ def artifact(kind: str, name: str, body, node: str = "", event_seq=None, run_id=
 def repo_map_digest(repo_map: dict) -> dict:
     """Per-file structure the dashboard's codebase-map panel renders.
 
-    Lives here rather than in graph_nodes so the legacy pipeline and the replay
-    script can build it without importing the graph (and its dependencies).
+    Lives here rather than in graph_nodes so the SWE-bench harness can build
+    it without importing the graph (and its dependencies).
     """
     files = (repo_map or {}).get("files") or {}
     languages, entries = {}, []
