@@ -9,10 +9,19 @@ import run_tracker
 SECRET = "test-secret"
 
 
+@pytest.fixture(autouse=True)
+def not_local():
+    """Default to the exposed posture; the local-mode tests opt in."""
+    dashboard.enable_local_mode(False)
+    yield
+    dashboard.enable_local_mode(False)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("MEMORY_DB", str(tmp_path / "memory.db"))
     monkeypatch.setenv("WEBHOOK_SECRET", SECRET)
+    monkeypatch.delenv("DASHBOARD_SECRET", raising=False)
     run_tracker.set_current_run(None)
     return TestClient(dashboard.build_app())
 
@@ -84,13 +93,76 @@ def test_stream_emits_the_run_then_closes(client, seeded):
     assert "event: done" in payload
 
 
-def test_ui_page_is_served_and_sets_the_cookie(client, seeded):
-    r = client.get(f"/ui?key={SECRET}")
-    assert r.status_code == 200
-    assert "SRE" in r.text
-    assert r.cookies.get("sre_key") == SECRET
+def test_ui_moves_the_key_out_of_the_url_into_a_cookie(client, seeded):
+    """The query string lands in access logs and history, so it must not stick."""
+    r = client.get(f"/ui?key={SECRET}", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui"
+    cookie = r.headers["set-cookie"]
+    assert SECRET in cookie and "HttpOnly" in cookie
+
+    page = client.get(f"/ui?key={SECRET}")          # follows the redirect
+    assert page.status_code == 200 and "SRE" in page.text
 
 
 def test_dashboard_refuses_when_no_secret_is_configured(client, seeded, monkeypatch):
     monkeypatch.delenv("WEBHOOK_SECRET")
     assert client.get(f"/api/runs?key={SECRET}").status_code == 401
+
+
+def test_dashboard_secret_is_preferred_over_the_webhook_secret(client, seeded, monkeypatch):
+    """A read-only secret must not have to be the one that can trigger runs."""
+    monkeypatch.setenv("DASHBOARD_SECRET", "view-only")
+    assert client.get("/api/runs?key=view-only").status_code == 200
+    assert client.get(f"/api/runs?key={SECRET}").status_code == 401
+
+
+# ── local mode: clone the repo, run it, no secret ────────────────────────────
+
+@pytest.fixture
+def local_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORY_DB", str(tmp_path / "memory.db"))
+    monkeypatch.delenv("WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("DASHBOARD_SECRET", raising=False)
+    run_tracker.set_current_run(None)
+    dashboard.enable_local_mode(True)
+
+
+@pytest.fixture
+def local_client(local_env):
+    """A browser on this machine hitting the loopback listener."""
+    return TestClient(dashboard.build_app(), base_url="http://localhost",
+                      client=("127.0.0.1", 51000))
+
+
+def test_local_mode_needs_no_secret(local_client, seeded):
+    assert local_client.get("/api/runs").status_code == 200
+    assert local_client.get("/ui").status_code == 200
+
+
+def test_local_mode_rejects_a_non_loopback_host_header(local_client, seeded):
+    """Defends against DNS rebinding: an attacker page resolving its own
+    hostname to 127.0.0.1 would otherwise read the console from the browser."""
+    r = local_client.get("/api/runs", headers={"Host": "evil.example.com"})
+    assert r.status_code == 401
+
+
+def test_local_mode_rejects_a_remote_client(local_env, seeded):
+    """Local mode is loopback-only; a routed client still needs the secret."""
+    remote = TestClient(dashboard.build_app(), base_url="http://localhost",
+                        client=("203.0.113.9", 51000))
+    assert remote.get("/api/runs").status_code == 401
+
+
+def test_mounting_into_another_app_never_enables_local_mode(client, seeded):
+    """main.py binds 0.0.0.0, so importing the router must stay authenticated."""
+    assert dashboard.local_mode() is False
+    assert client.get("/api/runs").status_code == 401
+
+
+def test_loopback_bind_detection():
+    assert dashboard._is_loopback_bind("127.0.0.1")
+    assert dashboard._is_loopback_bind("localhost")
+    assert dashboard._is_loopback_bind("::1")
+    assert not dashboard._is_loopback_bind("0.0.0.0")
+    assert not dashboard._is_loopback_bind("10.0.0.5")

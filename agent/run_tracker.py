@@ -109,7 +109,7 @@ def _never_fatal(default):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                logger.warning("run_tracker: %s failed (%s) — continuing", fn.__name__, e)
+                logger.warning("run_tracker: %s failed (%s) - continuing", fn.__name__, e)
                 return default() if callable(default) else default
         return wrapper
     return deco
@@ -368,7 +368,7 @@ def get_events(run_id: str, after_seq: int = 0) -> list:
 
 @_never_fatal(list)
 def get_artifact_index(run_id: str, after_id: int = 0) -> list:
-    """Artifact metadata without bodies — the UI fetches bodies on demand."""
+    """Artifact metadata without bodies - the UI fetches bodies on demand."""
     with _connect() as conn:
         return _rows(
             conn,

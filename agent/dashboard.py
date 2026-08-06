@@ -1,23 +1,34 @@
 """Read-only web dashboard over the agent's run log.
 
-Mounted into the webhook app in main.py, and runnable on its own:
+Clone the repo, run this, watch your own runs. No configuration:
 
-    python dashboard.py            # http://127.0.0.1:8001/ui?key=<WEBHOOK_SECRET>
+    python dashboard.py            # http://127.0.0.1:8001/ui
 
-Standalone mode exists so local replay / SWE-bench runs can be watched without
-starting the webhook server, since every pipeline writes to the same SQLite file.
+Two access modes, chosen by where the server listens:
+
+  local   bound to loopback, so only processes on this machine can reach it.
+          No secret required. This is the default and the common case: every
+          pipeline (webhook, replay, SWE-bench) writes to the same SQLite file,
+          so a fresh clone sees its runs immediately.
+
+  exposed bound to a routable interface, or mounted into the webhook server in
+          main.py. A secret is then mandatory, because the console serves repo
+          diffs, CI logs and full LLM prompts. Set DASHBOARD_SECRET (preferred,
+          it is read-only) or fall back to WEBHOOK_SECRET.
 
 The dashboard never imports pipeline code: it only reads runs/events/artifacts.
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
 import time
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse,
+                               StreamingResponse)
 
 import run_tracker
 
@@ -33,25 +44,63 @@ _POLL_SECONDS = 0.75
 # Stop streaming a finished run after this much quiet time.
 _TERMINAL_GRACE = 2.0
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_LOOPBACK_CLIENTS = {"127.0.0.1", "::1"}
+
+# Only the standalone entry point turns this on, and only for a loopback bind.
+# Importing the router into another app (main.py) leaves it off, so mounting the
+# console on the public webhook server can never silently drop authentication.
+_local_mode = False
+
+
+def enable_local_mode(on: bool = True):
+    global _local_mode
+    _local_mode = on
+
+
+def local_mode() -> bool:
+    return _local_mode
+
+
+def _is_local_request(request: Request) -> bool:
+    """True only for a browser on this machine talking to a loopback listener.
+
+    The Host check matters: without it a DNS rebinding page could point its own
+    hostname at 127.0.0.1 and read the console out of the user's browser.
+    """
+    if not _local_mode:
+        return False
+    client = request.client.host if request.client else ""
+    if client not in _LOOPBACK_CLIENTS:
+        return False
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+    return host in _LOOPBACK_HOSTS
+
+
+def expected_secret() -> str:
+    """DASHBOARD_SECRET is preferred: it grants reading only, while
+    WEBHOOK_SECRET also lets the holder POST a CI failure and start a run."""
+    return os.getenv("DASHBOARD_SECRET") or os.getenv("WEBHOOK_SECRET") or ""
+
 
 def secret_ok(request: Request) -> bool:
-    """The dashboard carries repo diffs and CI logs, so never serve it unauthenticated.
-
-    Accepts the shared secret from the webhook header, a ?key= query param, or
-    the sre_key cookie that /ui sets from ?key=.
-    """
-    expected = os.getenv("WEBHOOK_SECRET")
+    """Local requests pass freely. Everything else must present the secret."""
+    if _is_local_request(request):
+        return True
+    expected = expected_secret()
     if not expected:
         return False
     provided = (request.headers.get("X-Webhook-Secret")
                 or request.query_params.get("key")
                 or request.cookies.get("sre_key"))
-    return provided == expected
+    if not provided:
+        return False
+    return hmac.compare_digest(provided.encode(), expected.encode())
 
 
 def _require(request: Request):
     if not secret_ok(request):
-        raise HTTPException(status_code=401, detail="invalid webhook secret")
+        raise HTTPException(status_code=401, detail="invalid dashboard secret")
 
 
 # ── Page ─────────────────────────────────────────────────────────────────────
@@ -61,13 +110,17 @@ def ui(request: Request, key: str = ""):
     _require(request)
     if not os.path.exists(_PAGE):
         raise HTTPException(status_code=500, detail=f"dashboard.html missing at {_PAGE}")
-    response = FileResponse(_PAGE, media_type="text/html")
     if key:
-        # Cookie so the page's own fetch/SSE calls authenticate without the
-        # secret sitting in every URL. httponly=False is deliberate: nothing
-        # here reads it from JS, but it keeps the cookie visible for debugging.
-        response.set_cookie("sre_key", key, httponly=False, samesite="lax", max_age=86400)
-    return response
+        # Move the secret into a cookie and bounce to a bare /ui. Access logs,
+        # browser history and Referer headers keep the query string, so it must
+        # not survive past the first request.
+        response = RedirectResponse("/ui", status_code=303)
+        response.set_cookie(
+            "sre_key", key, httponly=True, samesite="lax", max_age=86400,
+            secure=request.url.scheme == "https",
+        )
+        return response
+    return FileResponse(_PAGE, media_type="text/html")
 
 
 # ── JSON API ─────────────────────────────────────────────────────────────────
@@ -151,21 +204,42 @@ def build_app():
 
     @app.get("/")
     def root():
-        return JSONResponse({"ui": "/ui?key=<WEBHOOK_SECRET>"})
+        return RedirectResponse("/ui")
 
     return app
 
 
+def _is_loopback_bind(host: str) -> bool:
+    return host.strip("[]") in {"localhost", "127.0.0.1", "::1"}
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     import uvicorn
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(message)s")
-    if not os.getenv("WEBHOOK_SECRET"):
-        raise SystemExit("WEBHOOK_SECRET is not set — refusing to serve run data")
+
     host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
     port = int(os.getenv("DASHBOARD_PORT", "8001"))
-    logger.info("Dashboard on http://%s:%d/ui?key=<WEBHOOK_SECRET>", host, port)
+
+    if _is_loopback_bind(host):
+        # Nothing off this machine can connect, so do not demand a secret.
+        # This is what makes "clone the repo and run it" work with no setup.
+        enable_local_mode()
+        logger.info("Console (local, no secret needed): http://%s:%d/ui", host, port)
+    elif expected_secret():
+        logger.warning("DASHBOARD_HOST=%s is reachable off this machine; "
+                       "every request must carry the secret", host)
+        logger.info("Console: http://%s:%d/ui?key=<DASHBOARD_SECRET>", host, port)
+    else:
+        raise SystemExit(
+            f"DASHBOARD_HOST={host} is reachable from outside this machine, and the "
+            "console serves repo diffs, CI logs and full LLM prompts.\n"
+            "Set DASHBOARD_SECRET (read-only, preferred) or WEBHOOK_SECRET first, or "
+            "drop DASHBOARD_HOST to run it locally with no secret."
+        )
+
+    logger.info("Reading runs from %s", run_tracker._db_path())
     uvicorn.run(build_app(), host=host, port=port)

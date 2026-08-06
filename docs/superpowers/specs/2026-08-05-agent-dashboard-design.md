@@ -1,4 +1,4 @@
-# Agent Run Dashboard — Design
+# Agent Run Dashboard - Design
 
 **Date:** 2026-08-05
 **Status:** approved, implementing
@@ -72,15 +72,15 @@ dashboard must never be able to kill a fix.
 
 ### Instrumentation
 
-- `agent_graph.run_graph` — opens and closes the run.
-- `graph_nodes` — every node wrapped with `@tracked`; emits start/end events with
+- `agent_graph.run_graph` - opens and closes the run.
+- `graph_nodes` - every node wrapped with `@tracked`; emits start/end events with
   durations and a per-node summary. Explicit artifacts: repo map stats (ingest),
   proposed fixes (fixer), unified diff + full test output (validator).
-- `graph_nodes._chat` — one `llm_call` artifact per call: node, model, latency,
+- `graph_nodes._chat` - one `llm_call` artifact per call: node, model, latency,
   prompt, response.
-- `pipeline._run_legacy` — same tracking at its own step boundaries, since
+- `pipeline._run_legacy` - same tracking at its own step boundaries, since
   `AGENT_MODE` defaults to `legacy`.
-- `scripts/replay_bugs.py` and `swe-bench-agent-eval/swe_harness.py` — manual
+- `scripts/replay_bugs.py` and `swe-bench-agent-eval/swe_harness.py` - manual
   `start_run`/`step`/`finish_run` around each bug/instance.
 
 ### HTTP surface
@@ -97,14 +97,25 @@ GET /api/artifacts/{id}       one artifact body
 GET /api/runs/{id}/stream     SSE; tails events by seq
 ```
 
-Auth: the existing `verify_secret` middleware is extended to accept the shared
-secret from the `X-Webhook-Secret` header, a `key` query param, or an `sre_key`
-cookie. `/ui?key=…` sets the cookie so subsequent API calls carry it. Incident
-rows contain repo diffs and CI logs, so the dashboard is never public.
+Auth depends on where the server listens, so that a fresh clone is usable with
+no setup while an exposed one cannot be left open:
+
+- **Local**: a loopback bind enables local mode. Requests from `127.0.0.1`
+  carrying a loopback Host header pass without a secret. The Host check blocks
+  DNS rebinding. Importing the router into another app never enables this, so
+  mounting on the public webhook server stays authenticated.
+- **Exposed**: any other bind requires `DASHBOARD_SECRET`, falling back to
+  `WEBHOOK_SECRET`, via `X-Webhook-Secret`, `?key=` or the `sre_key` cookie,
+  compared with `hmac.compare_digest`. `/ui?key=…` sets an HttpOnly cookie and
+  redirects to a bare `/ui` so the secret leaves the query string after one hop.
+  The standalone entry point refuses to start on a routable bind with no secret.
+
+`DASHBOARD_SECRET` is preferred for sharing: `WEBHOOK_SECRET` also authorizes
+`POST /webhook`, which starts a run and can push a branch.
 
 ### Frontend
 
-`agent/static/dashboard.html` — one file, no build step, no external assets.
+`agent/static/dashboard.html` - one file, no build step, no external assets.
 
 - Left rail: run list with status pill, source badge, repo@branch, elapsed time.
 - Top strip: the nine pipeline nodes with pending/active/done/failed/skipped
@@ -124,9 +135,9 @@ rather than a stack trace.
 
 ## Testing
 
-- `agent/tests/test_run_tracker.py` — run lifecycle, event ordering, artifact
+- `agent/tests/test_run_tracker.py` - run lifecycle, event ordering, artifact
   round-trip, never-fatal on an unwritable DB.
-- `agent/tests/test_dashboard_api.py` — 401 without key, run list shape, run
+- `agent/tests/test_dashboard_api.py` - 401 without key, run list shape, run
   detail shape, artifact fetch, unknown-run 404.
 
 ## Dependencies

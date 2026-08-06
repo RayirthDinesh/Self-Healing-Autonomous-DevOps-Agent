@@ -49,17 +49,38 @@ being edited (with diffs), unit-test results per attempt, which pipeline step is
 active, the codebase map the agent built, and every LLM call each agent node
 made.
 
+Clone the repo, run it, watch your own runs. No configuration:
+
 ```
-http://<server>:8000/ui?key=<WEBHOOK_SECRET>     # alongside the webhook server
-python agent/dashboard.py                        # standalone, port 8001
+python agent/dashboard.py        # http://127.0.0.1:8001/ui
 ```
 
 It reads `~/.sre-agent/memory.db` (override with `MEMORY_DB`), so runs from the
 webhook server, `scripts/replay_bugs.py`, and the SWE-bench harness all appear.
-Point them at the same `MEMORY_DB` to see them in one place. The key is the same
-`WEBHOOK_SECRET`; it is accepted as `?key=`, an `sre_key` cookie, or the
-`X-Webhook-Secret` header. Never expose it without one: run rows contain repo
-diffs and CI logs.
+Point them at the same `MEMORY_DB` to see them in one place.
+
+### Access
+
+Which access rules apply depends on where the server listens.
+
+**Local (default).** Bound to loopback, so only processes on your machine can
+reach it. No secret required. Requests must come from `127.0.0.1` and carry a
+`localhost` Host header, which keeps a DNS-rebinding page from reading the
+console out of your browser.
+
+**Exposed.** Set `DASHBOARD_HOST` to a routable address, or reach the console on
+the webhook server at `http://<server>:8000/ui`, and every request must carry a
+secret. Supply it as `?key=` (moved straight into a cookie and redirected away,
+so it does not linger in access logs), an `sre_key` cookie, or the
+`X-Webhook-Secret` header. Refusing to start unprotected is deliberate: run rows
+hold repo diffs, CI logs and full LLM prompts.
+
+Prefer `DASHBOARD_SECRET` over `WEBHOOK_SECRET` when you share access.
+`WEBHOOK_SECRET` also lets its holder POST a CI failure and start a run, which
+spends model credits and can push a branch; `DASHBOARD_SECRET` only reads.
+
+Over the public internet the secret still crosses the wire in clear text on
+plain HTTP, so put TLS in front or use `ssh -L 8001:localhost:8001`.
 
 ## Design choices
 
