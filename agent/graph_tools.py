@@ -2,7 +2,8 @@
 
 Deliberately model-agnostic: the localizer speaks a JSON tool protocol instead
 of a provider function-calling API, so any OpenRouter model can drive these.
-Tests and agent internals stay invisible, same guardrail as the legacy path.
+Tests and agent internals stay invisible: a failing assertion must not be
+'fixed' by editing the assertion.
 """
 
 import os

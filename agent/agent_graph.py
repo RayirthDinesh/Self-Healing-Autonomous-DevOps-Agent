@@ -1,4 +1,4 @@
-r"""LangGraph wiring for the multi-agent SRE pipeline (AGENT_MODE=graph).
+r"""LangGraph wiring for the multi-agent SRE pipeline.
 
 ingest -> router -(fast path)-> fixer
                 \-(miss)-> triage -> localizer -> fixer -> critic -(revise)-> fixer

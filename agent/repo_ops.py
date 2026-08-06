@@ -1,4 +1,4 @@
-"""Repository operations - clone, read source files, apply fixes, run tests, push."""
+"""Repository operations - clone, apply fixes, run tests, push."""
 
 import logging
 import os
@@ -6,9 +6,6 @@ import subprocess
 import tempfile
 
 logger = logging.getLogger("sre-agent-webhook")
-
-# Directories we never want to send to the LLM (test files, agent code, git internals)
-_SKIP_PREFIXES = ("tests", "agent", ".git", ".github")
 
 
 def clone_branch(repo: str, branch: str, dest: str):
@@ -21,26 +18,6 @@ def clone_branch(repo: str, branch: str, dest: str):
         text=True,
     )
     logger.info("Cloned %s@%s into %s", repo, branch, dest)
-
-
-def read_source_files(repo_path: str) -> dict:
-    """Walk the cloned repo and return {relative_path: content} for all source files."""
-    files = {}
-    for dirpath, _, filenames in os.walk(repo_path):
-        for fname in filenames:
-            full_path = os.path.join(dirpath, fname)
-            rel_path = os.path.relpath(full_path, repo_path)
-
-            # Skip anything we don't want the LLM to see
-            if any(rel_path.startswith(p) for p in _SKIP_PREFIXES):
-                continue
-            if not (fname.endswith(".py") or fname == "requirements.txt"):
-                continue
-
-            with open(full_path) as f:
-                files[rel_path] = f.read()
-
-    return files
 
 
 def apply_fixes(repo_path: str, fixes: list):
@@ -118,35 +95,6 @@ def run_tests(repo_path: str) -> tuple:
         logger.warning("Tests still FAILING after fix:\n%s", output[-3000:])
 
     return passed, output
-
-
-def run_static_analysis(repo_path: str) -> tuple:
-    """Run flake8 on the fixed repo in ~1 second before the 60-second Docker run.
-
-    Only checks for errors that guarantee test failure:
-      E9xx - syntax errors, bad encoding
-      F821 - undefined name
-      F823 - undefined local variable
-
-    Style warnings are ignored - we only care about hard failures.
-    Returns (passed: bool, output: str). Never raises: if flake8 is missing,
-    returns (True, "") so the pipeline falls through to Docker unchanged.
-    """
-    try:
-        result = subprocess.run(
-            ["python", "-m", "flake8", "--select=E9,F821,F823", "--statistics", repo_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        output = result.stdout + result.stderr
-        passed = result.returncode == 0
-        if passed:
-            logger.info("Static analysis passed - proceeding to Docker")
-        else:
-            logger.warning("Static analysis caught errors (skipping Docker):\n%s", output)
-        return passed, output
-    except Exception as e:
-        logger.warning("flake8 unavailable (%s) - skipping static analysis", e)
-        return True, ""
 
 
 def get_diff(repo_path: str) -> str:

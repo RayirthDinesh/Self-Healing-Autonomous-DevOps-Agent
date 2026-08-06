@@ -252,26 +252,26 @@ def test_routing_budget_rails():
          "fixes": [{"filename": "a", "content": "b"}]}) == "validator"
 
 
-@pytest.mark.parametrize("mode", ["graph", None])
-def test_pipeline_dispatches_to_graph_by_default(monkeypatch, mode):
+def test_pipeline_hands_the_failure_to_the_graph(monkeypatch):
     import pipeline
     seen = {}
-    if mode is None:
-        monkeypatch.delenv("AGENT_MODE", raising=False)
-    else:
-        monkeypatch.setenv("AGENT_MODE", mode)
-    import agent_graph
-    monkeypatch.setattr(agent_graph, "run_graph",
+    monkeypatch.setattr(pipeline, "run_graph",
                         lambda *a: seen.setdefault("args", a))
     pipeline.run("o/r", "b", "sha", "logs")
     assert seen["args"] == ("o/r", "b", "sha", "logs")
 
 
-def test_pipeline_honours_legacy_opt_out(monkeypatch):
+def test_pipeline_closes_the_run_when_the_graph_raises(monkeypatch):
+    """A crash must not leave the console showing a run that is still running."""
     import pipeline
-    seen = {}
-    monkeypatch.setenv("AGENT_MODE", "legacy")
-    monkeypatch.setattr(pipeline, "_run_legacy",
-                        lambda *a: seen.setdefault("args", a))
-    pipeline.run("o/r", "b", "sha", "logs")
-    assert seen["args"] == ("o/r", "b", "sha", "logs")
+    closed = {}
+
+    def boom(*a):
+        raise RuntimeError("graph exploded")
+
+    monkeypatch.setattr(pipeline, "run_graph", boom)
+    monkeypatch.setattr(pipeline.run_tracker, "close_if_running",
+                        lambda outcome="": closed.setdefault("outcome", outcome))
+    with pytest.raises(RuntimeError):
+        pipeline.run("o/r", "b", "sha", "logs")
+    assert closed["outcome"] == "pipeline crashed"

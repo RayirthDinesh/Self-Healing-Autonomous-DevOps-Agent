@@ -33,7 +33,7 @@ _CRITIC_MAX_ROUNDS = 1
 
 class FileFix(BaseModel):
     filename: str
-    content: str = ""      # full file overwrite (legacy / new files)
+    content: str = ""      # full file overwrite (new files, total rewrites)
     search: str = ""       # exact block to find  (preferred targeted edit)
     replace: str = ""      # replacement for that block
 
@@ -451,7 +451,7 @@ def route_after_validator(state) -> str:
 
 @tracked("publisher", _sum_publisher)
 def publisher(state):
-    """Same publish contract as the legacy path: push autofix branch, open PR."""
+    """Push the autofix branch and open the PR."""
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         logger.warning("GITHUB_TOKEN not set - skipping push and PR")

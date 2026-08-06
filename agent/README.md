@@ -117,7 +117,6 @@ python dashboard.py            # http://127.0.0.1:8001/ui
 | `GITHUB_TOKEN` | to open PRs | Classic PAT with the `repo` scope, or a fine-grained token with Contents and Pull requests write on the target repo. Without it the agent still fixes and validates, then logs "skipping push and PR". |
 | `LLM_MODEL` | no | Default `tencent/hy3-preview`. Any OpenRouter model id works, including free ones such as `inclusionai/ling-3.0-flash:free`. |
 | `TRIAGE_MODEL` | no | Cheaper model for the triage and review nodes. Falls back to `LLM_MODEL`. |
-| `AGENT_MODE` | no | `graph` (default) for the nine-node LangGraph pipeline, or `legacy` for the single-shot one. If LangGraph is not installed the graph falls back to legacy and says so in the log. |
 | `MEMORY_DB` | no | SQLite path. Default `~/.sre-agent/memory.db`. |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` | no | Console bind. Default `127.0.0.1:8001`. |
 | `DASHBOARD_SECRET` | when exposed | Read-only console secret. Falls back to `WEBHOOK_SECRET`. |
