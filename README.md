@@ -91,18 +91,27 @@ plain HTTP, so put TLS in front or use `ssh -L 8001:localhost:8001`.
 - **Server answers instantly** - the pipeline runs as a FastAPI background
   task so GitHub's webhook call never times out.
 
-## Deploying
+## Setup
 
-See [DEPLOY.md](DEPLOY.md) - full walkthrough for an Oracle Cloud Always-Free
-VM (systemd service, dual firewalls, and every gotcha hit along the way:
-UTF-8 BOM in `.env`, trailing newlines in secrets, uvicorn's h11
+**[agent/README.md](agent/README.md)** is the full guide: running it locally,
+what your codebase must satisfy for the agent to work on it, the CI workflow to
+copy in, environment reference, deploying on an Oracle Cloud Always-Free VM, and
+a troubleshooting table.
+
+[DEPLOY.md](DEPLOY.md) is the VM-level walkthrough it builds on: instance
+creation, the two firewalls, systemd, and every gotcha hit along the way
+(UTF-8 BOM in `.env`, trailing newlines in secrets, uvicorn's h11
 `Expect: 100-continue` bug).
 
-## Point it at your own repo
+The short version:
 
-1. Deploy the server, set its `.env` (secret, OpenRouter key, GitHub PAT).
-2. In your repo, add a CI step that POSTs `{repo, branch, commit_sha,
-   workflow_run_id, test_logs, status}` to `http://<server>:8000/webhook`
-   with the `X-Webhook-Secret` header (see sre-demo-app's
-   `.github/workflows/ci.yml` for a copy-paste example).
-3. Add `WEBHOOK_URL` + `WEBHOOK_SECRET` as Actions secrets. Done.
+1. Deploy the server, install Docker, set `.env` (webhook secret, OpenRouter
+   key, GitHub PAT).
+2. In the repo you want watched, add a CI step that POSTs `{repo, branch,
+   commit_sha, workflow_run_id, test_logs, status}` to
+   `http://<server>:8000/webhook` with the `X-Webhook-Secret` header.
+3. Add `WEBHOOK_URL` and `WEBHOOK_SECRET` as Actions secrets.
+
+Your target repo needs to be public, have `requirements.txt` at its root, and
+have a suite that passes under `python:3.11-slim`, since that is what the
+validator runs.

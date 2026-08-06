@@ -82,8 +82,18 @@ icacls ssh-key-YYYY-MM-DD.key /inheritance:r /grant:r "$($env:USERNAME):R"
 
 ## 4. Install & run the server
 
+Docker is required, not optional: the agent validates every fix by running the
+target repo's suite inside a throwaway `python:3.11-slim` container. Without the
+daemon, every attempt reports red and no PR is ever opened.
+
 ```bash
-sudo apt update && sudo apt install -y python3-pip python3-venv git
+sudo apt update && sudo apt install -y python3-pip python3-venv git docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker ubuntu     # log out and back in before this applies
+docker run --rm python:3.11-slim python -c "print('docker ok')"
+```
+
+```bash
 git clone https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent.git
 cd Self-Healing-Autonomous-DevOps-Agent
 git checkout main          # the agent/ dir lives on main, NOT the bug/* branches
@@ -119,7 +129,7 @@ curl http://localhost:8000/health        # {"status":"ok"}
 sudo tee /etc/systemd/system/sre-agent.service > /dev/null <<'EOF'
 [Unit]
 Description=SRE Agent Webhook Server
-After=network.target
+After=network.target docker.service
 
 [Service]
 User=ubuntu
