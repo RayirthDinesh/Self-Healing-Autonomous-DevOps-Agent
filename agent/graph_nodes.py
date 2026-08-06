@@ -8,10 +8,13 @@ import json
 import logging
 import os
 import shutil
+import time
 
 from pydantic import BaseModel
 
 import memory
+import run_tracker
+from run_tracker import tracked
 from graph_tools import TOOL_DESCRIPTIONS, make_tools, _visible
 from llm_client import _JSON_CONTRACT, _incidents_section
 from repo_map import get_repo_map
@@ -43,14 +46,18 @@ class FixResult(BaseModel):
 def _chat(prompt: str, model: str = None) -> str:
     """One LLM completion via OpenRouter. The single seam tests replace."""
     from langchain_openai import ChatOpenAI
+    resolved = model or os.getenv("LLM_MODEL", "tencent/hy3-preview")
     llm = ChatOpenAI(
-        model=model or os.getenv("LLM_MODEL", "tencent/hy3-preview"),
+        model=resolved,
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
         temperature=0.1,
         timeout=90,
     )
-    return llm.invoke(prompt).content
+    started = time.time()
+    content = llm.invoke(prompt).content
+    run_tracker.llm_call(resolved, prompt, content, (time.time() - started) * 1000)
+    return content
 
 
 def _triage_model() -> str:
@@ -70,8 +77,63 @@ def _step(state, step: str, detail: str = ""):
     memory.log_agent_step(state.get("incident_id"), step, detail)
 
 
+# ── Dashboard summaries ──────────────────────────────────────────────────────
+# One per node: the compact "what just happened" the run timeline renders.
+
+def _sum_ingest(state, update):
+    repo_map = update.get("repo_map") or {}
+    files = repo_map.get("files") or {}
+    return {
+        "error_class": update.get("error_class"),
+        "blame_files": len(update.get("blame") or {}),
+        "few_shots": len(update.get("incidents") or []),
+        "mapped_files": len(files),
+        "mapped_symbols": sum(len(e.get("symbols") or []) for e in files.values()),
+    }
+
+
+def _sum_router(state, update):
+    fp = update.get("fast_path")
+    return {"fast_path": bool(fp),
+            "signature": (fp or {}).get("signature", ""),
+            "targets": update.get("candidate_files") or []}
+
+
+def _sum_triage(state, update):
+    return {"summary": update.get("triage_summary", "")}
+
+
+def _sum_localizer(state, update):
+    return {"candidate_files": update.get("candidate_files") or []}
+
+
+def _sum_fixer(state, update):
+    return {"diagnosis": update.get("diagnosis", ""),
+            "files": [f["filename"] for f in update.get("fixes") or []]}
+
+
+def _sum_critic(state, update):
+    feedback = update.get("critic_feedback") or ""
+    return {"verdict": "revise" if feedback else "approve", "feedback": feedback}
+
+
+def _sum_validator(state, update):
+    return {"attempt": update.get("attempt"), "passed": bool(update.get("passed")),
+            "demoted_fast_path": bool(update.get("demoted_fast_path"))}
+
+
+def _sum_publisher(state, update):
+    return {"pr_url": update.get("pr_url", ""), "done": update.get("done", "")}
+
+
+def _sum_reflect(state, update):
+    return {"done": update.get("done", ""), "attempts": state.get("attempt", 0),
+            "llm_calls": state.get("llm_calls", 0)}
+
+
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
+@tracked("ingest", _sum_ingest)
 def ingest(state):
     """Phase 1 memory warm-up: PR fates, blame, few-shots, repo map sync."""
     repo, logs = state["repo"], state["test_logs"]
@@ -84,10 +146,14 @@ def ingest(state):
     _step(state, "ingest", json.dumps({
         "error_class": error_class, "blame_files": len(blame), "few_shots": len(incidents),
     }))
+    run_tracker.update_run(error_class=error_class)
+    run_tracker.artifact("repo_map", "codebase map",
+                         run_tracker.repo_map_digest(repo_map))
     return {"error_class": error_class, "blame": blame,
             "incidents": incidents, "repo_map": repo_map}
 
 
+@tracked("router", _sum_router)
 def router(state):
     """Deterministic: fire the fast path only for a proven failure shape."""
     fp = memory.fast_path_lookup(state["repo"], state["test_logs"])
@@ -99,7 +165,7 @@ def router(state):
             context = _load_files(state["workdir"], targets)
             return {"fast_path": fp, "fast_path_used": True,
                     "candidate_files": targets, "context": context,
-                    "triage_summary": "(skipped — fast path from repo memory)"}
+                    "triage_summary": "(skipped - fast path from repo memory)"}
     _step(state, "router", "no fast path")
     return {"fast_path": None, "fast_path_used": False}
 
@@ -108,6 +174,7 @@ def route_after_router(state) -> str:
     return "fixer" if state.get("fast_path") else "triage"
 
 
+@tracked("triage", _sum_triage)
 def triage(state):
     """Cheap LLM: one-call summary of what kind of failure this is."""
     prompt = (
@@ -122,7 +189,7 @@ def triage(state):
         parsed = _parse_json(_chat(prompt, model=_triage_model()))
         summary = parsed.get("summary", "")
     except Exception as e:
-        logger.warning("Triage parse failed (%s) — continuing without summary", e)
+        logger.warning("Triage parse failed (%s) - continuing without summary", e)
     _step(state, "triage", summary)
     return {"triage_summary": summary, "llm_calls": state.get("llm_calls", 0) + 1}
 
@@ -163,6 +230,7 @@ def _load_files(workdir: str, paths: list) -> dict:
     return context
 
 
+@tracked("localizer", _sum_localizer)
 def localizer(state):
     """LLM drives the tool belt to pick the files the fixer will see in full."""
     tools = make_tools(state["workdir"], state["repo_map"])
@@ -213,7 +281,7 @@ def localizer(state):
     if candidates:
         candidates = [p for p in candidates if _visible(p, state["repo_map"])]
     if not candidates:
-        logger.info("Localizer gave no usable files — falling back to traceback+blame seeds")
+        logger.info("Localizer gave no usable files - falling back to traceback+blame seeds")
         candidates = _fallback_candidates(state)
     candidates = candidates[:_CANDIDATE_CAP]
 
@@ -223,6 +291,7 @@ def localizer(state):
             "llm_calls": llm_calls}
 
 
+@tracked("fixer", _sum_fixer)
 def fixer(state):
     """Main LLM writes the fix as validated structured output."""
     files_section = "".join(
@@ -240,7 +309,7 @@ def fixer(state):
         f"\n## Source files\n{files_section}\n"
         + (f"\nA previous attempt FAILED validation with:\n```\n{feedback[-2000:]}\n```\n"
            if feedback else "")
-        + (f"\nThis exact change was already tried and FAILED — do NOT propose it again, "
+        + (f"\nThis exact change was already tried and FAILED - do NOT propose it again, "
            f"find a materially different fix:\n```diff\n{state['last_fix_diff'][-2000:]}\n```\n"
            if state.get("last_fix_diff") else "")
         + (f"\nReviewer feedback on your last proposal:\n{critique}\n" if critique else "")
@@ -258,7 +327,7 @@ def fixer(state):
     for fix in result.fixes:
         clean = fix.filename.replace("\\", "/").lstrip("./")
         if clean.startswith(("tests", "agent", ".git", ".github")) or "/test" in clean:
-            logger.warning("Fixer tried to modify %s — dropped", clean)
+            logger.warning("Fixer tried to modify %s - dropped", clean)
             continue
         entry = {"filename": clean}
         if fix.search:
@@ -270,10 +339,13 @@ def fixer(state):
 
     _step(state, "fixer", json.dumps(
         {"diagnosis": result.diagnosis, "files": [f["filename"] for f in fixes]}))
+    for fix in fixes:
+        run_tracker.artifact("proposed_fix", fix["filename"], fix)
     return {"diagnosis": result.diagnosis, "fixes": fixes,
             "llm_calls": state.get("llm_calls", 0) + 1}
 
 
+@tracked("critic", _sum_critic)
 def critic(state):
     """Cheap LLM sanity-checks the proposed fix before we pay for Docker."""
     if not state.get("fixes"):
@@ -300,7 +372,7 @@ def critic(state):
         verdict = parsed.get("verdict", "approve")
         feedback = parsed.get("feedback", "")
     except Exception as e:
-        logger.warning("Critic parse failed (%s) — approving", e)
+        logger.warning("Critic parse failed (%s) - approving", e)
     _step(state, "critic", f"{verdict}: {feedback}")
     update = {"llm_calls": state.get("llm_calls", 0) + 1}
     if verdict == "revise":
@@ -320,6 +392,7 @@ def route_after_critic(state) -> str:
     return "validator"
 
 
+@tracked("validator", _sum_validator)
 def validator(state):
     """Docker is the judge. Red resets the clone so the next attempt starts clean."""
     workdir = state["workdir"]
@@ -344,13 +417,16 @@ def validator(state):
     update.update(passed=passed, test_output=test_output, incident_id=incident_id)
     _step({**state, "incident_id": incident_id}, "validator",
           f"attempt {attempt}: {'green' if passed else 'red'}")
+    run_tracker.artifact("diff", f"attempt {attempt}", fix_diff)
+    run_tracker.artifact("test_output", f"attempt {attempt}", test_output)
+    run_tracker.update_run(attempts=attempt, llm_calls=state.get("llm_calls", 0))
 
     if not passed:
         update["failure_feedback"] = test_output[-3000:]
         update["last_fix_diff"] = fix_diff
         if state.get("fast_path_used"):
             memory.fast_path_miss(state["repo"], state["fast_path"]["signature"])
-            logger.info("Fast path missed — demoted, rerouting through triage")
+            logger.info("Fast path missed - demoted, rerouting through triage")
             update.update(fast_path_used=False, fast_path=None, demoted_fast_path=True)
         # pristine tree for the next attempt
         try:
@@ -373,11 +449,12 @@ def route_after_validator(state) -> str:
     return "localizer"
 
 
+@tracked("publisher", _sum_publisher)
 def publisher(state):
     """Same publish contract as the legacy path: push autofix branch, open PR."""
     token = os.getenv("GITHUB_TOKEN")
     if not token:
-        logger.warning("GITHUB_TOKEN not set — skipping push and PR")
+        logger.warning("GITHUB_TOKEN not set - skipping push and PR")
         return {"done": "no_token"}
     safe_branch = state["branch"].replace("/", "-")
     fix_branch = f"autofix/{safe_branch}-{state['commit_sha'][:7]}"
@@ -400,9 +477,11 @@ def publisher(state):
     if state.get("incident_id") is not None:
         memory.set_incident_pr(state["incident_id"], pr_url)
     _step(state, "publisher", pr_url)
+    run_tracker.update_run(pr_url=pr_url)
     return {"pr_url": pr_url, "done": "published"}
 
 
+@tracked("reflect", _sum_reflect)
 def reflect(state):
     """Run post-mortem into agent_steps, then give up cleanly."""
     _step(state, "reflect", json.dumps({

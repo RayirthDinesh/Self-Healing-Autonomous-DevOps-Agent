@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
+import run_tracker
 from repo_map import build_map
 from repo_ops import apply_fixes, clone_branch, run_tests
 from retrieval import select_context
@@ -47,19 +48,29 @@ BRANCHES = {
 
 def replay(branch, expected, live):
     with tempfile.TemporaryDirectory() as workdir:
+        run_tracker.start_run(REPO, branch, source="replay", mode="retrieval",
+                              instance_id=branch)
         clone_branch(REPO, branch, workdir)
+        run_tracker.step("clone", detail={"branch": branch})
         passed, test_logs = run_tests(workdir)
+        run_tracker.artifact("ci_logs", "baseline failure output", test_logs)
         if passed:
             # Local env can mask install failures (dep already present from a
-            # previous run) — the pip ERROR lines still prove the CI failure.
+            # previous run) - the pip ERROR lines still prove the CI failure.
             from retrieval import parse_failure_log
             if not parse_failure_log(test_logs).install_failure:
+                run_tracker.finish_run("error", "branch unexpectedly green")
                 return {"branch": branch, "ok": False, "note": "branch unexpectedly green"}
 
         repo_map = build_map(REPO, branch, workdir)
+        run_tracker.artifact("repo_map", "codebase map",
+                             run_tracker.repo_map_digest(repo_map))
+        run_tracker.step("ingest", detail={"files": len(repo_map.get("files") or {})})
         ctx = select_context(test_logs, repo_map, workdir)
 
         hit = expected <= set(ctx.full)
+        run_tracker.step("retrieval", status="ok" if hit else "error", detail={
+            "full_tier": sorted(ctx.full), "expected": sorted(expected), "hit": hit})
         m = ctx.metrics
         row = {
             "branch": branch,
@@ -73,10 +84,23 @@ def replay(branch, expected, live):
 
         if live and hit:
             from llm_client import call_llm
+            run_tracker.set_current_node("fixer")
             result = call_llm(test_logs, ctx)
-            apply_fixes(workdir, result.get("fixes", []))
-            fixed, _ = run_tests(workdir)
+            fixes = result.get("fixes", [])
+            run_tracker.step("fixer", detail={"diagnosis": result.get("diagnosis", ""),
+                                              "files": [f["filename"] for f in fixes]})
+            for fix in fixes:
+                run_tracker.artifact("proposed_fix", fix["filename"], fix, node="fixer")
+            apply_fixes(workdir, fixes)
+            fixed, fix_output = run_tests(workdir)
+            run_tracker.artifact("test_output", "post-fix suite", fix_output, node="validator")
+            run_tracker.step("validator", detail={"attempt": 1, "passed": fixed})
             row["live_fix"] = "green" if fixed else "STILL RED"
+            run_tracker.finish_run("passed" if fixed else "failed",
+                                   "live fix " + row["live_fix"], attempts=1)
+        else:
+            run_tracker.finish_run("passed" if hit else "failed",
+                                   "retrieval hit" if hit else "retrieval miss")
         return row
 
 
@@ -89,7 +113,11 @@ def main():
     targets = {args.branch: BRANCHES[args.branch]} if args.branch else BRANCHES
     failures = 0
     for branch, expected in targets.items():
-        row = replay(branch, expected, args.live)
+        try:
+            row = replay(branch, expected, args.live)
+        finally:
+            # never leave a crashed branch showing as "running" in the dashboard
+            run_tracker.close_if_running(outcome="replay crashed")
         status = "PASS" if row["ok"] else "FAIL"
         if not row["ok"]:
             failures += 1

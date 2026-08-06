@@ -1,0 +1,1367 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRE Agent Console</title>
+<style>
+/* ============================================================================
+   Design tokens
+   4px base grid. One dominant tone (ink), one neutral structure (hairlines),
+   one accent (amber). Green/red appear only as semantic state marks.
+   ========================================================================== */
+:root {
+  --s1: 4px;  --s2: 8px;   --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px;  --s7: 48px; --s8: 64px;
+
+  --r-sm: 4px; --r-md: 6px; --r-lg: 10px;
+
+  --sans: system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --mono: "Cascadia Code", "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+  --dur: 140ms;
+  --ease: cubic-bezier(.2, .6, .2, 1);
+}
+
+:root[data-theme="dark"] {
+  --bg:        #0E1013;
+  --panel:     #131619;
+  --raised:    #171B20;
+  --hover:     #1D2229;
+  --line:      #242A31;
+  --line-soft: #1B2026;
+  --line-hard: #333C46;
+
+  --t1: #E8EBEE;   /* primary:   headings, values */
+  --t2: #A3ACB6;   /* secondary: supporting copy */
+  --t3: #6B7681;   /* tertiary:  labels, metadata */
+
+  --accent:      #E5A24B;
+  --accent-ink:  #1A1206;
+  --accent-soft: rgba(229, 162, 75, .13);
+  --accent-line: rgba(229, 162, 75, .38);
+
+  --ok:  #5FBF8E;
+  --bad: #E3706A;
+
+  --shadow-1: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 16px 40px -24px rgba(0,0,0,.9), 0 2px 6px rgba(0,0,0,.28);
+  --inset-hi: inset 0 1px 0 rgba(255,255,255,.03);
+}
+
+:root[data-theme="light"] {
+  --bg:        #F7F6F4;
+  --panel:     #FFFFFF;
+  --raised:    #FFFFFF;
+  --hover:     #F1EFEC;
+  --line:      #E3E0DB;
+  --line-soft: #EDEAE6;
+  --line-hard: #CFCAC2;
+
+  --t1: #16181B;
+  --t2: #545C65;
+  --t3: #838C95;
+
+  --accent:      #B26C12;
+  --accent-ink:  #FFFFFF;
+  --accent-soft: rgba(178, 108, 18, .10);
+  --accent-line: rgba(178, 108, 18, .34);
+
+  --ok:  #1F7A50;
+  --bad: #B23B33;
+
+  --shadow-1: 0 1px 2px rgba(31, 27, 20, .06);
+  --shadow-2: 0 18px 40px -26px rgba(31, 27, 20, .35), 0 2px 6px rgba(31,27,20,.05);
+  --inset-hi: inset 0 1px 0 rgba(255,255,255,.6);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--t1);
+  font: 400 14px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  overflow: hidden;
+}
+::selection { background: var(--accent-soft); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ============================================================================
+   Global navigation rail
+   ========================================================================== */
+nav.rail {
+  width: 232px;
+  flex: 0 0 232px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: var(--s5) 0 var(--s3);
+}
+.brand {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: 0 var(--s5) var(--s6);
+}
+.brand .mark {
+  width: 28px; height: 28px; flex: none;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: grid; place-items: center;
+  font: 700 13px/1 var(--mono);
+  box-shadow: var(--shadow-1);
+}
+.brand b { font: 600 14px/1.2 var(--sans); letter-spacing: -.01em; display: block; }
+.brand span { font: 400 11px/1.3 var(--mono); color: var(--t3); letter-spacing: .02em; }
+
+.navgroup {
+  padding: 0 var(--s3);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.navgroup > h6 {
+  margin: var(--s5) var(--s2) var(--s2);
+  font: 500 10px/1 var(--sans);
+  letter-spacing: .09em; text-transform: uppercase; color: var(--t3);
+}
+.navitem {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 0; background: none; width: 100%;
+  color: var(--t2);
+  font: 500 13px/1.4 var(--sans);
+  border-radius: var(--r-md);
+  cursor: pointer; text-align: left;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.navitem:hover { background: var(--hover); color: var(--t1); }
+.navitem[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--t1);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.navitem .glyph {
+  width: 16px; flex: none; text-align: center;
+  font: 400 13px/1 var(--mono); color: var(--t3);
+}
+.navitem[aria-current="page"] .glyph { color: var(--accent); }
+.navitem .tally {
+  margin-left: auto;
+  font: 500 11px/1 var(--mono); color: var(--t3);
+  padding: 3px var(--s2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.rail footer {
+  margin-top: auto;
+  padding: var(--s4) var(--s5) 0;
+  border-top: 1px solid var(--line-soft);
+  display: flex; align-items: center; gap: var(--s3);
+}
+.conn { display: flex; align-items: center; gap: var(--s2); font: 400 11px/1 var(--mono); color: var(--t3); }
+.led { width: 6px; height: 6px; border-radius: 50%; background: var(--t3); flex: none; }
+.led.live { background: var(--ok); animation: breathe 2.4s var(--ease) infinite; }
+.led.err  { background: var(--bad); }
+@keyframes breathe { 50% { opacity: .3; } }
+
+.ghost {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  background: transparent; color: var(--t2);
+  font: 500 11px/1 var(--sans);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-md); cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.ghost:hover { border-color: var(--line-hard); color: var(--t1); background: var(--hover); }
+
+/* ============================================================================
+   Shell
+   ========================================================================== */
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.topbar {
+  height: 56px; flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  display: flex; align-items: center; gap: var(--s4);
+  padding: 0 var(--s6);
+}
+.topbar h1 { margin: 0; font: 600 15px/1.2 var(--sans); letter-spacing: -.01em; }
+.topbar .crumb { font: 400 12px/1 var(--mono); color: var(--t3); }
+.spacer { flex: 1; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s4);
+  border-radius: var(--r-md);
+  font: 600 12px/1.4 var(--sans);
+  border: 1px solid transparent;
+  cursor: pointer; text-decoration: none;
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+              background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.btn-primary { background: var(--accent); color: var(--accent-ink); box-shadow: var(--shadow-1); }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
+.btn-primary:active { transform: translateY(0); }
+.btn-quiet { border-color: var(--line); color: var(--t2); background: var(--panel); }
+.btn-quiet:hover { border-color: var(--line-hard); color: var(--t1); }
+.btn[aria-disabled="true"] {
+  background: transparent; color: var(--t3);
+  border-color: var(--line); cursor: not-allowed;
+  box-shadow: none; transform: none;
+}
+.btn .arrow { transition: transform var(--dur) var(--ease); }
+.btn:not([aria-disabled="true"]):hover .arrow { transform: translate(2px, -2px); }
+
+.scroll { flex: 1; overflow-y: auto; scrollbar-width: thin; }
+.scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.scroll::-webkit-scrollbar-thumb {
+  background: var(--line); border-radius: 99px;
+  border: 3px solid var(--bg); background-clip: padding-box;
+}
+.scroll::-webkit-scrollbar-thumb:hover { background: var(--line-hard); background-clip: padding-box; }
+
+/* ============================================================================
+   Editorial pages (Overview, Process)
+   ========================================================================== */
+.prose { padding: var(--s8); max-width: 78ch; }
+
+/* editorial pages get a companion column so wide screens stay balanced */
+.reading {
+  display: grid; grid-template-columns: minmax(0, 78ch);
+  gap: var(--s8); padding: var(--s8);
+  align-items: start;
+}
+.reading > .prose { padding: 0; max-width: none; }
+.reading > aside { display: none; }
+@media (min-width: 1180px) {
+  .reading { grid-template-columns: minmax(0, 74ch) 264px; }
+  .reading > aside { display: block; position: sticky; top: var(--s5); }
+}
+aside .side {
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--panel); box-shadow: var(--shadow-1);
+  padding: var(--s4); margin-bottom: var(--s4);
+}
+aside h6 {
+  margin: 0 0 var(--s3); font: 500 10px/1 var(--sans);
+  letter-spacing: .09em; text-transform: uppercase; color: var(--t3);
+}
+aside dl { display: grid; grid-template-columns: 1fr auto; gap: var(--s2) var(--s3); margin: 0; }
+aside dt { font: 400 12px/1.4 var(--sans); color: var(--t2); }
+aside dd { margin: 0; font: 500 12px/1.4 var(--mono); color: var(--t1); font-variant-numeric: tabular-nums; }
+aside .side p { margin: 0; font: 400 12px/1.55 var(--sans); color: var(--t2); }
+aside .side a { color: var(--accent); text-decoration: none; font-weight: 500; }
+aside .side a:hover { text-decoration: underline; }
+.eyebrow {
+  font: 500 11px/1 var(--sans); letter-spacing: .1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: var(--s4);
+}
+.prose h2 {
+  font: 400 34px/1.2 var(--serif);
+  letter-spacing: -.015em; margin: 0 0 var(--s4);
+  color: var(--t1);
+}
+.prose h3 {
+  font: 600 15px/1.3 var(--sans);
+  margin: var(--s7) 0 var(--s3); letter-spacing: -.005em;
+}
+.lede { font: 400 17px/1.6 var(--sans); color: var(--t2); margin: 0 0 var(--s6); }
+.prose p { color: var(--t2); margin: 0 0 var(--s4); max-width: 68ch; }
+.prose strong { color: var(--t1); font-weight: 600; }
+code, .m { font-family: var(--mono); font-size: .92em; }
+.prose code { color: var(--t1); background: var(--hover); padding: 1px 5px; border-radius: var(--r-sm); }
+
+.rule { height: 1px; background: var(--line); margin: var(--s7) 0; border: 0; }
+
+/* stat strip: numbers carry hierarchy through weight, not colour */
+.stats { display: flex; gap: var(--s7); padding: var(--s5) 0; border-block: 1px solid var(--line); margin-bottom: var(--s6); }
+.stat .v { font: 600 26px/1.1 var(--sans); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stat .k { font: 400 12px/1.4 var(--sans); color: var(--t3); margin-top: var(--s1); }
+
+.steps { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--line); }
+.steps li { position: relative; padding: 0 0 var(--s5) var(--s5); }
+.steps li::before {
+  content: ""; position: absolute; left: -4px; top: 7px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--bg); border: 1.5px solid var(--line-hard);
+}
+.steps li.key::before { background: var(--accent); border-color: var(--accent); }
+.steps h4 { margin: 0 0 var(--s1); font: 600 13px/1.4 var(--sans); }
+.steps h4 .m { color: var(--accent); font-weight: 500; margin-right: var(--s2); }
+.steps p { margin: 0; font-size: 13px; color: var(--t2); }
+
+.callout {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  background: var(--panel);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  padding: var(--s4) var(--s5);
+  box-shadow: var(--shadow-1);
+}
+.callout h4 { margin: 0 0 var(--s2); font: 600 13px/1.4 var(--sans); }
+.callout p:last-child { margin-bottom: 0; }
+
+/* pipeline diagram: plain boxes, hairlines, one accent for the loop */
+.flow { margin: var(--s5) 0 var(--s6); }
+.flow-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) 0; }
+/* arrow travels with the chip it points at, so a wrap never leaves one dangling */
+.hop { display: inline-flex; align-items: center; gap: var(--s2); padding-left: var(--s2); }
+.chip {
+  font: 500 12px/1 var(--mono);
+  padding: var(--s3) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--t1);
+  box-shadow: var(--inset-hi);
+  white-space: nowrap;
+}
+.chip.term { border-style: dashed; color: var(--t2); }
+.chip.win { border-color: var(--accent-line); color: var(--accent); }
+.link { color: var(--t3); font: 400 12px/1 var(--mono); user-select: none; }
+.loopnote {
+  margin-top: var(--s4);
+  border-top: 1px dashed var(--line-hard);
+  padding-top: var(--s3);
+  display: grid; gap: var(--s2);
+}
+.loopnote div {
+  display: grid; grid-template-columns: 108px 1fr; gap: var(--s3);
+  font: 400 12px/1.5 var(--mono); color: var(--t3);
+}
+.loopnote dt, .loopnote span.cond { color: var(--accent); font-weight: 500; }
+.loopnote b { color: var(--t2); font-weight: 500; }
+
+/* ============================================================================
+   Runs: list rail + detail
+   ========================================================================== */
+.split { flex: 1; display: flex; min-height: 0; }
+.runlist {
+  width: 300px; flex: 0 0 300px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.runlist header {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s4) var(--s4) var(--s3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.runlist header h6 {
+  margin: 0; font: 500 10px/1 var(--sans);
+  letter-spacing: .09em; text-transform: uppercase; color: var(--t3);
+}
+select {
+  margin-left: auto;
+  background: var(--raised); color: var(--t2);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  font: 400 11px/1 var(--sans); padding: var(--s1) var(--s2);
+  cursor: pointer; transition: border-color var(--dur) var(--ease);
+}
+select:hover { border-color: var(--line-hard); }
+
+.run {
+  width: 100%; text-align: left; border: 0; background: none;
+  border-bottom: 1px solid var(--line-soft);
+  padding: var(--s3) var(--s4);
+  cursor: pointer; display: grid; gap: var(--s1);
+  transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.run:hover { background: var(--hover); }
+.run[aria-selected="true"] { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+.run .l1 { display: flex; align-items: baseline; gap: var(--s2); }
+.run .repo {
+  font: 600 13px/1.4 var(--sans); color: var(--t1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run .l2 { display: flex; align-items: center; gap: var(--s2); font: 400 11px/1.4 var(--mono); color: var(--t3); }
+.run .l2 .br { color: var(--t2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run .when { margin-left: auto; white-space: nowrap; }
+
+/* status marks: a dot + a word, not a saturated pill */
+.state { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--sans); letter-spacing: .02em; }
+.state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.state.passed  { color: var(--ok); }
+.state.failed, .state.error { color: var(--bad); }
+.state.running { color: var(--accent); }
+.state.running::before { animation: breathe 2.4s var(--ease) infinite; }
+
+.tag {
+  font: 400 10px/1 var(--mono); color: var(--t3);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 3px 5px; letter-spacing: .02em;
+}
+
+.detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.runhead {
+  padding: var(--s5) var(--s6) var(--s4);
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-start; gap: var(--s4); flex-wrap: wrap;
+}
+.runhead .title { font: 600 20px/1.25 var(--sans); letter-spacing: -.015em; margin: 0 0 var(--s2); }
+.runhead .facts { display: flex; align-items: center; gap: var(--s4); font: 400 12px/1 var(--mono); color: var(--t3); flex-wrap: wrap; }
+.runhead .facts b { color: var(--t2); font-weight: 500; }
+
+/* pipeline strip */
+.stripwrap { position: relative; border-bottom: 1px solid var(--line); background: var(--panel); }
+/* fade hints that the pipeline continues past the edge */
+.stripwrap::after {
+  content: ""; position: absolute; inset: 0 0 0 auto; width: var(--s8);
+  background: linear-gradient(to right, transparent, var(--panel));
+  pointer-events: none;
+}
+.strip {
+  display: flex; align-items: center; gap: var(--s1);
+  padding: var(--s4) var(--s6);
+  overflow-x: auto; scrollbar-width: none;
+}
+.strip::-webkit-scrollbar { height: 0; }
+.step {
+  position: relative; flex: none;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--raised);
+  min-width: 84px;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.step + .step { margin-left: var(--s5); }
+.step + .step::before {
+  content: ""; position: absolute; left: calc(var(--s5) * -1); top: 50%;
+  width: var(--s5); height: 1px; background: var(--line);
+}
+.step .nm { display: block; font: 500 12px/1.3 var(--sans); color: var(--t2); }
+.step .ms { display: block; font: 400 10px/1.3 var(--mono); color: var(--t3); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.step.pending { opacity: .48; }
+.step.done .nm { color: var(--t1); }
+.step.done { border-color: var(--line-hard); }
+.step.active {
+  border-color: var(--accent); background: var(--accent-soft);
+}
+.step.active .nm { color: var(--accent); font-weight: 600; }
+.step.failed { border-color: var(--bad); }
+.step.failed .nm { color: var(--bad); }
+.step .rep {
+  position: absolute; top: -7px; right: -7px;
+  font: 600 9px/1 var(--mono); color: var(--accent-ink);
+  background: var(--accent); border-radius: 999px; padding: 3px 5px;
+}
+
+/* tabs */
+.tabs { display: flex; gap: var(--s5); padding: 0 var(--s6); border-bottom: 1px solid var(--line); background: var(--panel); }
+.tab {
+  position: relative; border: 0; background: none;
+  padding: var(--s3) 0 calc(var(--s3) - 1px);
+  font: 500 13px/1.4 var(--sans); color: var(--t3);
+  cursor: pointer; transition: color var(--dur) var(--ease);
+}
+.tab::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  background: var(--accent); transform: scaleX(0); transform-origin: left;
+  transition: transform var(--dur) var(--ease);
+}
+.tab:hover { color: var(--t2); }
+.tab[aria-selected="true"] { color: var(--t1); font-weight: 600; }
+.tab[aria-selected="true"]::after { transform: scaleX(1); }
+.tab .n { font: 400 10px/1 var(--mono); color: var(--t3); margin-left: var(--s1); }
+
+.pane { padding: var(--s6); }
+
+/* ============================================================================
+   Content blocks
+   ========================================================================== */
+.block { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--shadow-1); overflow: hidden; }
+.block + .block { margin-top: var(--s4); }
+.block > header {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+}
+.block > header h6 {
+  margin: 0; font: 500 10px/1 var(--sans);
+  letter-spacing: .09em; text-transform: uppercase; color: var(--t3);
+}
+.block .pad { padding: var(--s4); }
+
+dl.facts { display: grid; grid-template-columns: 150px 1fr; gap: var(--s3) var(--s4); margin: 0; }
+dl.facts dt { font: 500 12px/1.5 var(--sans); color: var(--t3); }
+dl.facts dd { margin: 0; font: 400 13px/1.55 var(--sans); color: var(--t1); }
+dl.facts dd.m { font-family: var(--mono); font-size: 12px; }
+dl.facts dd.dim { color: var(--t2); }
+
+pre {
+  margin: 0; padding: var(--s4);
+  font: 400 12px/1.55 var(--mono);
+  white-space: pre-wrap; word-break: break-word;
+  color: var(--t2); background: var(--bg);
+  max-height: 460px; overflow: auto;
+}
+
+.diff { font: 400 12px/1.6 var(--mono); background: var(--bg); overflow-x: auto; }
+.diff .l { display: block; padding: 0 var(--s4); white-space: pre; }
+.diff .add { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--t1); }
+.diff .del { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--t1); }
+.diff .hunk { color: var(--accent); background: var(--accent-soft); }
+.diff .meta { color: var(--t3); }
+
+.metrics { display: flex; gap: var(--s6); }
+.metric .v { font: 600 22px/1.1 var(--sans); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.metric .k { font: 400 11px/1.4 var(--sans); color: var(--t3); margin-top: 2px; }
+.metric.pass .v { color: var(--ok); }
+.metric.fail .v { color: var(--bad); }
+.metric.zero .v { color: var(--t3); }
+
+ul.plain { list-style: none; margin: 0; padding: 0; }
+ul.plain li { padding: var(--s2) 0; border-bottom: 1px solid var(--line-soft); font: 400 12px/1.5 var(--mono); color: var(--t2); }
+ul.plain li:last-child { border-bottom: 0; }
+ul.plain li b { color: var(--bad); font-weight: 500; }
+
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left; padding: var(--s2) var(--s4);
+  font: 500 10px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--t3);
+  border-bottom: 1px solid var(--line);
+}
+tbody td { padding: var(--s2) var(--s4); border-bottom: 1px solid var(--line-soft); font: 400 12px/1.5 var(--mono); color: var(--t2); }
+tbody td:first-child { color: var(--t1); }
+tbody tr { transition: background var(--dur) var(--ease); }
+tbody tr:hover { background: var(--hover); }
+tbody tr.focus td:first-child { box-shadow: inset 2px 0 0 var(--accent); color: var(--t1); font-weight: 500; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* timeline */
+.tl { display: grid; grid-template-columns: 68px 128px 16px 1fr 68px; }
+.tl > div { padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line-soft); font: 400 12px/1.5 var(--mono); color: var(--t3); }
+.tl > div.node { color: var(--t1); font-family: var(--sans); font-weight: 500; font-size: 12px; }
+.tl > div.txt { color: var(--t2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl > div.ms { text-align: right; font-variant-numeric: tabular-nums; }
+.tl > div.ok  { color: var(--ok); }
+.tl > div.err { color: var(--bad); }
+
+/* llm call log */
+.call { border-bottom: 1px solid var(--line-soft); }
+.call:last-child { border-bottom: 0; }
+.call > .row { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); }
+.call .who { font: 500 12px/1 var(--sans); color: var(--t1); min-width: 76px; }
+.call .model { font: 400 11px/1 var(--mono); color: var(--t3); }
+.call .num { margin-left: auto; font: 400 11px/1 var(--mono); color: var(--t3); font-variant-numeric: tabular-nums; }
+
+/* ============================================================================
+   Workspace: command-line disclosure
+   ========================================================================== */
+.term {
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--panel); overflow: hidden; box-shadow: var(--shadow-2);
+}
+.term .cmd {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+  font: 400 12px/1.5 var(--mono); color: var(--t2);
+  background: var(--raised);
+}
+.term .cmd .ps1 { color: var(--accent); font-weight: 600; }
+.term .cmd .path { color: var(--t3); }
+
+.frow {
+  width: 100%; border: 0; background: none; cursor: pointer;
+  display: grid; grid-template-columns: 16px 1fr 84px 92px 78px;
+  align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  text-align: left;
+  border-bottom: 1px solid var(--line-soft);
+  font: 400 12px/1.6 var(--mono); color: var(--t2);
+  transition: background var(--dur) var(--ease);
+}
+.frow:hover { background: var(--hover); }
+.frow[aria-expanded="true"] { background: var(--hover); color: var(--t1); }
+.frow .caret { color: var(--t3); transition: transform var(--dur) var(--ease); }
+.frow[aria-expanded="true"] .caret { transform: rotate(90deg); color: var(--accent); }
+.frow .p { color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frow .meta { color: var(--t3); text-align: right; font-variant-numeric: tabular-nums; }
+.frow .badge { justify-self: start; font-size: 11px; }
+.frow .badge.edited { color: var(--accent); }
+.frow .badge.focus  { color: var(--t2); }
+.frow .badge.test   { color: var(--t3); }
+
+.fbody { border-bottom: 1px solid var(--line-soft); background: var(--bg); }
+.fbody .cmd { background: transparent; border-bottom: 1px dashed var(--line); }
+
+.empty { padding: var(--s8) var(--s6); color: var(--t3); font: 400 13px/1.6 var(--sans); text-align: center; }
+.empty b { display: block; color: var(--t2); font: 600 14px/1.4 var(--sans); margin-bottom: var(--s2); }
+
+.loadbtn {
+  border: 1px solid var(--line); background: var(--raised); color: var(--t2);
+  font: 500 11px/1 var(--mono); padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm); cursor: pointer; margin: var(--s3) var(--s4);
+  transition: all var(--dur) var(--ease);
+}
+.loadbtn:hover { border-color: var(--accent-line); color: var(--accent); }
+
+details > summary {
+  cursor: pointer; padding: var(--s2) var(--s4);
+  font: 400 11px/1.5 var(--mono); color: var(--t3);
+  border-top: 1px solid var(--line-soft); list-style: none;
+  transition: color var(--dur) var(--ease);
+}
+details > summary:hover { color: var(--t1); }
+details > summary::before { content: "▸ "; color: var(--t3); }
+details[open] > summary::before { content: "▾ "; color: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+
+<nav class="rail">
+  <div class="brand">
+    <div class="mark">SR</div>
+    <div><b>SRE Agent</b><span>console</span></div>
+  </div>
+
+  <div class="navgroup">
+    <h6>Context</h6>
+    <button class="navitem" data-view="overview"><span class="glyph">§</span> The problem</button>
+    <button class="navitem" data-view="process"><span class="glyph">⇄</span> How it works</button>
+    <h6>Telemetry</h6>
+    <button class="navitem" data-view="runs"><span class="glyph">◧</span> Runs <span class="tally" id="tally">–</span></button>
+    <button class="navitem" data-view="workspace"><span class="glyph">▤</span> Workspace</button>
+  </div>
+
+  <footer>
+    <span class="conn"><span class="led" id="led"></span><span id="connlabel">idle</span></span>
+    <button class="ghost" id="theme">Light</button>
+  </footer>
+</nav>
+
+<main>
+  <div class="topbar">
+    <h1 id="viewtitle">Runs</h1>
+    <span class="crumb" id="crumb"></span>
+    <span class="spacer"></span>
+    <span id="topactions"></span>
+  </div>
+  <div id="viewroot" style="flex:1; display:flex; min-height:0;"></div>
+</main>
+
+<script>
+"use strict";
+
+/* ── model ──────────────────────────────────────────────────────────────── */
+
+const GRAPH_NODES  = ["clone","ingest","router","triage","localizer","fixer","critic","validator","publisher","reflect"];
+const LEGACY_NODES = ["clone","ingest","retrieval","fixer","static_analysis","validator","publisher"];
+const LABEL = {
+  clone: "clone", ingest: "map repo", retrieval: "retrieve", router: "route",
+  triage: "triage", localizer: "localize", fixer: "patch", critic: "review",
+  static_analysis: "lint", validator: "verify", publisher: "open PR", reflect: "stand down",
+};
+const VIEW_TITLE = { overview: "The problem", process: "How it works", runs: "Runs", workspace: "Workspace" };
+
+const state = {
+  view: "runs", runs: [], runId: null, run: null,
+  events: [], artifacts: [], bodies: {},
+  tab: "diagnosis", file: null, open: {}, es: null,
+};
+
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const ago = (ts) => {
+  if (!ts) return "-";
+  const d = Math.max(0, Date.now() / 1000 - ts);
+  if (d < 60) return Math.floor(d) + "s ago";
+  if (d < 3600) return Math.floor(d / 60) + "m ago";
+  if (d < 86400) return Math.floor(d / 3600) + "h ago";
+  return Math.floor(d / 86400) + "d ago";
+};
+const dur = (ms) => ms == null ? "" : ms < 1000 ? Math.round(ms) + "ms" : (ms / 1000).toFixed(1) + "s";
+const clock = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString([], { hour12: false }) : "";
+const bytes = (n) => n == null ? "" : n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " KB";
+
+async function api(path) {
+  const r = await fetch(path, { credentials: "same-origin" });
+  if (!r.ok) throw new Error(path + " → " + r.status);
+  return r.json();
+}
+function conn(cls, label) {
+  $("#led").className = "led " + cls;
+  $("#connlabel").textContent = label;
+}
+
+/* ── routing ────────────────────────────────────────────────────────────── */
+
+function go(view) {
+  state.view = view;
+  if (location.hash !== "#/" + view) location.hash = "#/" + view;
+  $$(".navitem").forEach(b =>
+    b.setAttribute("aria-current", b.dataset.view === view ? "page" : "false"));
+  $("#viewtitle").textContent = VIEW_TITLE[view];
+  render();
+}
+$$(".navitem").forEach(b => b.onclick = () => go(b.dataset.view));
+addEventListener("hashchange", () => {
+  const v = location.hash.replace("#/", "");
+  if (VIEW_TITLE[v] && v !== state.view) go(v);
+});
+
+/* ── theme ──────────────────────────────────────────────────────────────── */
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $("#theme").textContent = t === "dark" ? "Light" : "Dark";
+  try { localStorage.setItem("sre-theme", t); } catch {}
+}
+$("#theme").onclick = () =>
+  setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+try { setTheme(localStorage.getItem("sre-theme") || "dark"); } catch { setTheme("dark"); }
+
+/* ── data ───────────────────────────────────────────────────────────────── */
+
+async function loadRuns(sourceFilter) {
+  const src = sourceFilter ?? ($("#srcfilter") ? $("#srcfilter").value : "");
+  try {
+    const d = await api("/api/runs?limit=100" + (src ? "&source=" + encodeURIComponent(src) : ""));
+    state.runs = d.runs || [];
+    $("#tally").textContent = state.runs.length;
+    if (!state.runId && state.runs.length) return selectRun(state.runs[0].id);
+    render();
+  } catch (e) {
+    conn("err", "no access");
+    $("#viewroot").innerHTML =
+      `<div class="empty"><b>Cannot read the run log</b>${esc(e.message)}<br><br>
+       Open with <code>/ui?key=&lt;WEBHOOK_SECRET&gt;</code></div>`;
+  }
+}
+
+async function selectRun(id) {
+  if (state.es) { state.es.close(); state.es = null; }
+  Object.assign(state, { runId: id, events: [], artifacts: [], bodies: {}, file: null, open: {} });
+  const d = await api("/api/runs/" + id);
+  state.run = d.run; state.events = d.events || []; state.artifacts = d.artifacts || [];
+  render();
+  if (state.run.status === "running") stream(id); else conn("", "idle");
+}
+
+function stream(id) {
+  conn("live", "streaming");
+  const es = new EventSource("/api/runs/" + id + "/stream");
+  state.es = es;
+  es.onmessage = (m) => {
+    const p = JSON.parse(m.data);
+    if (p.run) state.run = p.run;
+    if (p.events?.length) state.events.push(...p.events);
+    if (p.artifacts?.length) state.artifacts.push(...p.artifacts);
+    const row = state.runs.find(r => r.id === id);
+    if (row && state.run) Object.assign(row, state.run);
+    render();
+  };
+  es.addEventListener("done", () => { es.close(); state.es = null; conn("", "idle"); loadRuns(); });
+  es.onerror = () => { conn("err", "stream lost"); es.close(); state.es = null; };
+}
+
+const arts = (kind) => state.artifacts.filter(a => a.kind === kind);
+const lastEv = (node) => [...state.events].reverse().find(e => e.node === node && e.phase !== "start");
+
+async function body(id) {
+  if (state.bodies[id] !== undefined) return state.bodies[id];
+  state.bodies[id] = "";
+  const a = await api("/api/artifacts/" + id);
+  state.bodies[id] = a.body || "";
+  render();
+  return state.bodies[id];
+}
+
+function parseTests(out) {
+  const r = { passed: 0, failed: 0, errors: 0, skipped: 0, failing: [], summary: "" };
+  if (!out) return r;
+  const sum = [...out.matchAll(/^=+ (.*?(?:passed|failed|error|no tests ran).*?) =+$/gim)].pop();
+  if (sum) {
+    r.summary = sum[1].trim();
+    for (const [, n, w] of r.summary.matchAll(/(\d+)\s+(passed|failed|errors?|skipped)/g))
+      r[w.startsWith("error") ? "errors" : w] += Number(n);
+  }
+  r.failing = [...new Set([...out.matchAll(/^(?:FAILED|ERROR)\s+(\S+)/gm)].map(m => m[1]))];
+  return r;
+}
+
+function stepStates() {
+  const order = (state.run?.mode === "legacy" ? LEGACY_NODES : GRAPH_NODES).slice();
+  for (const e of state.events) if (!order.includes(e.node)) order.push(e.node);
+  const map = Object.fromEntries(order.map(n => [n, { name: n, status: "pending", visits: 0, ms: 0 }]));
+  for (const e of state.events) {
+    const n = map[e.node]; if (!n) continue;
+    if (e.phase === "start") { n.status = "active"; n.visits++; }
+    else { n.status = e.status === "error" ? "failed" : "done"; n.ms += e.duration_ms || 0; }
+  }
+  if (state.run && state.run.status !== "running")
+    Object.values(map).forEach(n => { if (n.status === "active") n.status = "done"; });
+  return order.map(n => map[n]);
+}
+
+/* files the agent worked in, merged from the repo map + the edits it made */
+function workspaceFiles() {
+  const mapArt = arts("repo_map")[0];
+  const digest = mapArt && state.bodies[mapArt.id] ? safeJSON(state.bodies[mapArt.id]) : null;
+  const edited = new Map();
+  for (const a of arts("proposed_fix")) edited.set(a.name, a);
+  const focus = new Set([
+    ...(lastEv("localizer")?.detail?.candidate_files || []),
+    ...(lastEv("router")?.detail?.targets || []),
+    ...(lastEv("retrieval")?.detail?.files || []),
+  ]);
+  const rows = (digest?.files || []).map(f => ({
+    ...f, edited: edited.get(f.path) || null, focus: focus.has(f.path),
+  }));
+  for (const [path, a] of edited)                       // edits outside the map
+    if (!rows.some(r => r.path === path))
+      rows.push({ path, lang: "", size: null, symbols: null, is_test: false, edited: a, focus: true });
+  rows.sort((a, b) =>
+    (!!b.edited - !!a.edited) || (b.focus - a.focus) || (b.symbols || 0) - (a.symbols || 0));
+  return { rows, mapArt, digest };
+}
+const safeJSON = (s) => { try { return JSON.parse(s); } catch { return null; } };
+
+/* ── render ─────────────────────────────────────────────────────────────── */
+
+function render() {
+  $("#crumb").textContent = "";
+  $("#topactions").innerHTML = "";
+  const root = $("#viewroot");
+  root.style.display = "flex";
+  if (state.view === "overview")  { root.innerHTML = `<div class="scroll" style="flex:1">${viewOverview()}</div>`; }
+  else if (state.view === "process")   { root.innerHTML = `<div class="scroll" style="flex:1">${viewProcess()}</div>`; }
+  else if (state.view === "workspace") { root.innerHTML = `<div class="scroll" style="flex:1">${viewWorkspace()}</div>`; }
+  else { root.innerHTML = viewRuns(); }
+  wire();
+}
+
+/* page 1: the problem */
+function viewOverview() {
+  const runs = state.runs.length;
+  const green = state.runs.filter(r => r.status === "passed").length;
+  const prs = state.runs.filter(r => r.pr_url).length;
+  const latest = state.runs[0];
+  return `<div class="reading"><div class="prose">
+    <p class="eyebrow">Overview</p>
+    <h2>CI went red at 02:14. Nobody was awake to read the traceback.</h2>
+    <p class="lede">This agent reads the failing test output, works out which source file is
+      actually at fault, writes the patch, proves it against the suite, and opens a pull
+      request, or stands down and says nothing shipped.</p>
+
+    <div class="stats">
+      <div class="stat"><div class="v">${runs}</div><div class="k">runs recorded</div></div>
+      <div class="stat"><div class="v">${green}</div><div class="k">suites turned green</div></div>
+      <div class="stat"><div class="v">${prs}</div><div class="k">pull requests opened</div></div>
+    </div>
+
+    <h3>The problem</h3>
+    <p>A failed CI run is a handoff. The signal, a stack trace buried in a few thousand
+      lines of log, sits in a tab nobody has open until morning. The engineer who picks it
+      up spends the first twenty minutes doing work a machine can do: reading the trace,
+      guessing which module is guilty, opening those files, rebuilding the mental model of
+      code they may not have written.</p>
+    <p>The fix itself is often one line. <strong>The expensive part is the triage.</strong></p>
+
+    <h3>What makes this hard to automate</h3>
+    <p>An LLM handed a whole repository and a log will happily produce something that
+      looks like a fix. Three failure modes follow: it edits the test instead of the bug, it
+      rewrites files it was never asked to touch, or it produces a patch that was never run.</p>
+
+    <div class="callout">
+      <h4>Three rules the pipeline enforces</h4>
+      <p><strong>The model never sees the tests.</strong> Test files, CI config and the agent's own
+        source are filtered out of context, so a failure cannot be "fixed" by rewriting the assertion.</p>
+      <p><strong>A patch earns its PR.</strong> The full suite runs in a throwaway Docker container
+        against the patched clone. Red means nothing is pushed.</p>
+      <p><strong>Edits are surgical.</strong> Fixes are expressed as search/replace blocks, not
+        whole-file rewrites, so an unrelated line cannot silently change.</p>
+    </div>
+
+    <hr class="rule">
+    <h3>What this console is for</h3>
+    <p>Everything above happens headless in about ninety seconds. This console is the window
+      into it: which error was identified, which files were opened and edited, what the suite
+      said, and what every agent said to the model on the way. Start with
+      <a href="#/process" class="m" style="color:var(--accent)">How it works</a>, then watch a
+      run in <a href="#/runs" class="m" style="color:var(--accent)">Runs</a>.</p>
+  </div>
+  <aside>
+    ${latest ? `<div class="side">
+      <h6>Most recent run</h6>
+      <dl>
+        <dt>Repository</dt><dd>${esc((latest.repo || "").split("/").pop())}</dd>
+        <dt>Status</dt><dd><span class="state ${latest.status}">${esc(latest.status)}</span></dd>
+        <dt>Attempts</dt><dd>${esc(latest.attempts ?? 0)}</dd>
+        <dt>Model calls</dt><dd>${esc(latest.llm_calls ?? 0)}</dd>
+        <dt>Started</dt><dd>${ago(latest.started_at)}</dd>
+      </dl>
+    </div>` : ""}
+    <div class="side">
+      <h6>Budgets per run</h6>
+      <dl>
+        <dt>Validation attempts</dt><dd>3</dd>
+        <dt>Model calls</dt><dd>15</dd>
+        <dt>Localizer tool turns</dt><dd>6</dd>
+        <dt>Files sent in full</dt><dd>5</dd>
+      </dl>
+    </div>
+    <div class="side">
+      <h6>Next</h6>
+      <p>Read <a href="#/process">how the pipeline decides</a>, or open the
+        <a href="#/runs">most recent run</a>.</p>
+    </div>
+  </aside></div>`;
+}
+
+/* page 2: the process */
+function viewProcess() {
+  const N = (n, cls = "") => `<span class="chip ${cls}">${n}</span>`;
+  const hop = (n, cls = "") => `<span class="hop"><span class="link">→</span>${N(n, cls)}</span>`;
+  return `<div class="reading"><div class="prose">
+    <p class="eyebrow">Process</p>
+    <h2>Nine agents, one contract: prove it or stand down.</h2>
+    <p class="lede">Each node takes the shared run state, does one job, and hands it on. The
+      only node that can declare success is the one that runs the tests.</p>
+
+    <div class="flow">
+      <div class="flow-row">
+        ${N("ingest")}${hop("route")}${hop("triage")}${hop("localize")}
+        ${hop("patch")}${hop("review")}${hop("verify")}${hop("open PR", "win")}
+      </div>
+      <div class="loopnote">
+        <div><span class="cond">verify red</span><span>back to <b>localize</b> with the failure output fed in, up to 3 attempts</span></div>
+        <div><span class="cond">fast path hit</span><span>skip <b>triage</b> and <b>localize</b>, patch the known file directly</span></div>
+        <div><span class="cond">budget spent</span><span><b>stand down</b>: write the post-mortem, push nothing</span></div>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li class="key"><h4><span class="m">ingest</span> build the mental map</h4>
+        <p>Clones the failing branch, parses it with tree-sitter into a symbol graph, and
+          reloads memory: which files this error class has blamed before, and how similar
+          past incidents were fixed.</p></li>
+      <li><h4><span class="m">route</span> has this exact failure shape merged before?</h4>
+        <p>A deterministic check, no model call. Two prior merged fixes for the same
+          signature and the agent skips straight to patching the known file.</p></li>
+      <li><h4><span class="m">triage</span> name the failure</h4>
+        <p>One cheap model call turns thousands of log lines into two sentences and a list
+          of suspects.</p></li>
+      <li class="key"><h4><span class="m">localize</span> find the guilty file</h4>
+        <p>The model drives a small tool belt (read a symbol, grep the tree, list importers)
+          for up to six turns, then commits to at most five files. If it fails, traceback
+          seeds and blame priors take over.</p></li>
+      <li class="key"><h4><span class="m">patch</span> write the edit</h4>
+        <p>Sees only those files in full. Returns search/replace blocks as validated
+          structured output. Anything targeting tests, CI config or the agent itself is
+          dropped before it reaches disk.</p></li>
+      <li><h4><span class="m">review</span> sanity-check before spending Docker</h4>
+        <p>A second cheap call asks one question: does this plausibly address the diagnosed
+          failure without unrelated edits? A "revise" sends it back once.</p></li>
+      <li class="key"><h4><span class="m">verify</span> Docker is the judge</h4>
+        <p>The patched clone runs the full suite in a throwaway container. Red resets the
+          tree to pristine and feeds the new output back into the retry.</p></li>
+      <li><h4><span class="m">open PR</span> or stand down</h4>
+        <p>Green pushes an <code>autofix/*</code> branch and opens a PR carrying the diagnosis.
+          Out of attempts writes a post-mortem and stops. There is no third outcome.</p></li>
+    </ol>
+
+    <h3>What memory does between runs</h3>
+    <p>When a PR merges, every file it touched gains blame weight for that error class; a
+      closed PR halves it. Two merges of the same failure signature promote it to a fast
+      path. The agent gets better at a repository the longer it watches it.</p>
+  </div>
+  <aside>
+    <div class="side">
+      <h6>Never editable</h6>
+      <dl>
+        <dt>Test files</dt><dd>blocked</dd>
+        <dt>CI config</dt><dd>blocked</dd>
+        <dt>Agent source</dt><dd>blocked</dd>
+      </dl>
+    </div>
+    <div class="side">
+      <h6>Cost per node</h6>
+      <dl>
+        <dt>triage · review</dt><dd>cheap</dd>
+        <dt>localize</dt><dd>≤ 6 calls</dd>
+        <dt>patch</dt><dd>main model</dd>
+        <dt>verify</dt><dd>Docker</dd>
+      </dl>
+    </div>
+    <div class="side">
+      <h6>See it run</h6>
+      <p>The <a href="#/runs">Runs view</a> streams these nodes live; the
+        <a href="#/workspace">Workspace</a> shows the files each one touched.</p>
+    </div>
+  </aside></div>`;
+}
+
+/* page 3: runs */
+function viewRuns() {
+  return `
+    <div class="runlist">
+      <header>
+        <h6>Runs</h6>
+        <select id="srcfilter">
+          <option value="">all sources</option>
+          <option value="webhook">webhook</option>
+          <option value="replay">replay</option>
+          <option value="swebench">swebench</option>
+        </select>
+      </header>
+      <div class="scroll" id="runrows">${runRows()}</div>
+    </div>
+    <div class="detail">${state.run ? runDetail() : `<div class="empty"><b>No run selected</b>Pick a run on the left.</div>`}</div>`;
+}
+
+function runRows() {
+  if (!state.runs.length) return `<div class="empty"><b>No runs yet</b>Trigger a CI failure, or run the replay script.</div>`;
+  return state.runs.map(r => `
+    <button class="run" data-id="${r.id}" aria-selected="${r.id === state.runId}">
+      <div class="l1">
+        <span class="repo">${esc(r.repo || "?")}</span>
+        <span class="spacer"></span>
+        <span class="state ${r.status}">${esc(r.status)}</span>
+      </div>
+      <div class="l2">
+        <span class="tag">${esc(r.source || "?")}</span>
+        <span class="br">${esc(r.branch || r.instance_id || "-")}</span>
+        <span class="when">${ago(r.started_at)}</span>
+      </div>
+    </button>`).join("");
+}
+
+function runDetail() {
+  const r = state.run;
+  const counts = {
+    files: new Set(arts("proposed_fix").map(a => a.name)).size,
+    tests: arts("test_output").length,
+    calls: arts("llm_call").length,
+    events: state.events.length,
+  };
+  const pr = r.pr_url
+    ? `<a class="btn btn-primary" href="${esc(r.pr_url)}" target="_blank" rel="noopener noreferrer"
+          id="prlink">View pull request <span class="arrow">↗</span></a>`
+    : `<span class="btn" aria-disabled="true" title="A pull request is only opened when the suite turns green">No pull request</span>`;
+
+  return `
+    <div class="runhead">
+      <div style="min-width:0">
+        <h2 class="title">${esc(r.repo || "?")}</h2>
+        <div class="facts">
+          <span class="state ${r.status}">${esc(r.status)}</span>
+          <span><b>${esc(r.branch || r.instance_id || "-")}</b></span>
+          <span>${esc((r.commit_sha || "").slice(0, 7) || "-")}</span>
+          <span>${esc(r.source || "")}${r.mode ? " · " + esc(r.mode) : ""}</span>
+          ${r.error_class ? `<span><b>${esc(r.error_class)}</b></span>` : ""}
+          <span>${esc(r.attempts ?? 0)} attempts · ${esc(r.llm_calls ?? 0)} calls</span>
+          <span>${ago(r.started_at)}</span>
+        </div>
+      </div>
+      <span class="spacer"></span>
+      <div style="display:flex; gap:var(--s2)">
+        <button class="btn btn-quiet" data-view="workspace">Open workspace</button>
+        ${pr}
+      </div>
+    </div>
+
+    <div class="stripwrap"><div class="strip">${stepStates().map(s => `
+      <div class="step ${s.status}">
+        ${s.visits > 1 ? `<span class="rep">×${s.visits}</span>` : ""}
+        <span class="nm">${esc(LABEL[s.name] || s.name)}</span>
+        <span class="ms">${s.ms ? dur(s.ms) : s.status}</span>
+      </div>`).join("")}</div></div>
+
+    <div class="tabs" role="tablist">
+      ${tab("diagnosis", "Diagnosis")}
+      ${tab("patches", "Patches", counts.files)}
+      ${tab("tests", "Tests", counts.tests)}
+      ${tab("activity", "Agent activity", counts.calls)}
+      ${tab("timeline", "Timeline", counts.events)}
+    </div>
+
+    <div class="scroll"><div class="pane">${
+      ({ diagnosis: paneDiagnosis, patches: panePatches, tests: paneTests,
+         activity: paneActivity, timeline: paneTimeline })[state.tab]()
+    }</div></div>`;
+}
+
+const tab = (id, label, n) =>
+  `<button class="tab" role="tab" data-tab="${id}" aria-selected="${state.tab === id}">${label}${
+    n ? `<span class="n">${n}</span>` : ""}</button>`;
+
+function paneDiagnosis() {
+  const r = state.run;
+  const triage = lastEv("triage")?.detail?.summary || "";
+  const fix = lastEv("fixer")?.detail || {};
+  const critic = lastEv("critic")?.detail || {};
+  const ci = arts("ci_logs")[0];
+  const latest = arts("test_output").slice(-1)[0];
+  const parsed = latest && state.bodies[latest.id] ? parseTests(state.bodies[latest.id]) : null;
+
+  return `
+    <div class="block">
+      <header><h6>What the agent identified</h6></header>
+      <div class="pad">
+        <dl class="facts">
+          <dt>Error class</dt><dd class="m">${esc(r.error_class || "-")}</dd>
+          <dt>Triage</dt><dd class="dim">${esc(triage || "-")}</dd>
+          <dt>Diagnosis</dt><dd>${esc(fix.diagnosis || "-")}</dd>
+          <dt>Files targeted</dt><dd class="m">${esc((fix.files || []).join("  ") || "-")}</dd>
+          <dt>Reviewer</dt><dd class="dim">${esc(critic.verdict || "-")}${critic.feedback ? ": " + esc(critic.feedback) : ""}</dd>
+          <dt>Outcome</dt><dd class="m">${esc(r.outcome || r.status)}</dd>
+        </dl>
+      </div>
+    </div>
+    ${parsed?.failing.length ? `<div class="block">
+      <header><h6>Still failing after the last attempt</h6></header>
+      <div class="pad"><ul class="plain">${parsed.failing.map(f => `<li><b>✕</b> ${esc(f)}</li>`).join("")}</ul></div>
+    </div>` : ""}
+    ${ci ? `<div class="block">
+      <header><h6>Original CI output</h6><span class="spacer"></span><span class="tag">${bytes(ci.size)}</span></header>
+      ${blob(ci.id, true)}
+    </div>` : ""}`;
+}
+
+function blob(id, tail) {
+  const t = state.bodies[id];
+  if (t === undefined) return `<button class="loadbtn" data-load="${id}">load</button>`;
+  return `<pre>${esc(tail && t.length > 8000 ? t.slice(-8000) : t)}</pre>`;
+}
+
+function panePatches() {
+  const fixes = arts("proposed_fix"), diffs = arts("diff");
+  if (!fixes.length && !diffs.length)
+    return `<div class="empty"><b>No edits yet</b>The patch node has not produced a fix for this run.</div>`;
+  const names = [...new Set(fixes.map(f => f.name))];
+  if (!state.file && names.length) state.file = names[0];
+
+  return `
+    ${names.length ? `<div class="block">
+      <header><h6>Proposed edits</h6><span class="spacer"></span>
+        <span style="display:flex; gap:var(--s1)">${names.map(n =>
+          `<button class="loadbtn" data-file="${esc(n)}"
+            style="margin:0; ${n === state.file ? "border-color:var(--accent-line); color:var(--accent)" : ""}">${esc(n)}</button>`).join("")}</span>
+      </header>
+      ${fixes.filter(f => f.name === state.file).map(fixBlock).join("")}
+    </div>` : ""}
+    ${diffs.map(d => `<div class="block">
+      <header><h6>Applied diff: ${esc(d.name)}</h6><span class="spacer"></span><span class="tag">${bytes(d.size)}</span></header>
+      ${state.bodies[d.id] === undefined
+        ? `<button class="loadbtn" data-load="${d.id}">load diff</button>`
+        : `<div class="diff">${renderDiff(state.bodies[d.id])}</div>`}
+    </div>`).join("")}`;
+}
+
+function fixBlock(a) {
+  if (state.bodies[a.id] === undefined) return `<button class="loadbtn" data-load="${a.id}">load edit</button>`;
+  const fix = safeJSON(state.bodies[a.id]);
+  if (!fix) return `<pre>${esc(state.bodies[a.id])}</pre>`;
+  if (fix.search)
+    return `<div class="diff">
+      <span class="l meta">- replace</span>${fix.search.split("\n").map(l => `<span class="l del">${esc(l)}</span>`).join("")}
+      <span class="l meta">+ with</span>${(fix.replace || "").split("\n").map(l => `<span class="l add">${esc(l)}</span>`).join("")}
+    </div>`;
+  return `<div class="diff"><span class="l meta">full file rewrite</span>${
+    (fix.content || "").split("\n").map(l => `<span class="l add">${esc(l)}</span>`).join("")}</div>`;
+}
+
+function renderDiff(text) {
+  if (!text) return `<div class="pad" style="color:var(--t3)">empty diff</div>`;
+  return text.split("\n").map(l => {
+    let c = "";
+    if (/^(\+\+\+|---|diff |index )/.test(l)) c = "meta";
+    else if (l.startsWith("@@")) c = "hunk";
+    else if (l.startsWith("+")) c = "add";
+    else if (l.startsWith("-")) c = "del";
+    return `<span class="l ${c}">${esc(l) || " "}</span>`;
+  }).join("");
+}
+
+function paneTests() {
+  const outs = arts("test_output");
+  if (!outs.length) return `<div class="empty"><b>Suite has not run</b>Nothing reached the verify node yet.</div>`;
+  return outs.map(a => {
+    const loaded = state.bodies[a.id];
+    const p = loaded === undefined ? null : parseTests(loaded);
+    const green = p && !p.failed && !p.errors && p.passed > 0;
+    return `<div class="block">
+      <header><h6>${esc(a.name)}</h6>
+        ${p ? `<span class="state ${green ? "passed" : "failed"}">${green ? "green" : "red"}</span>` : ""}
+        <span class="spacer"></span><span class="tag">${bytes(a.size)}</span></header>
+      ${p ? `<div class="pad">
+        <div class="metrics">
+          <div class="metric ${p.passed ? "pass" : "zero"}"><div class="v">${p.passed}</div><div class="k">passed</div></div>
+          <div class="metric ${p.failed ? "fail" : "zero"}"><div class="v">${p.failed}</div><div class="k">failed</div></div>
+          <div class="metric ${p.errors ? "fail" : "zero"}"><div class="v">${p.errors}</div><div class="k">errors</div></div>
+          <div class="metric zero"><div class="v">${p.skipped}</div><div class="k">skipped</div></div>
+        </div>
+        ${p.summary ? `<p class="m" style="color:var(--t3); margin:var(--s4) 0 0">${esc(p.summary)}</p>` : ""}
+        ${p.failing.length ? `<ul class="plain" style="margin-top:var(--s3)">${
+          p.failing.map(f => `<li><b>✕</b> ${esc(f)}</li>`).join("")}</ul>` : ""}
+      </div>
+      <details><summary>raw output</summary><pre>${esc(loaded.slice(-20000))}</pre></details>`
+      : `<button class="loadbtn" data-load="${a.id}">load results</button>`}
+    </div>`;
+  }).join("");
+}
+
+function paneActivity() {
+  const calls = arts("llm_call");
+  if (!calls.length) return `<div class="empty"><b>No model calls</b>This run never reached an LLM node.</div>`;
+  return `<div class="block"><header><h6>Model calls, in order</h6><span class="spacer"></span>
+      <span class="tag">${calls.length} calls</span></header>
+    ${calls.map(a => {
+      const c = state.bodies[a.id] === undefined ? null : safeJSON(state.bodies[a.id]);
+      return `<div class="call">
+        <div class="row">
+          <span class="who">${esc(LABEL[a.node] || a.node || "llm")}</span>
+          <span class="model">${esc((a.name || "").split("·").pop().trim())}</span>
+          ${c ? `<span class="num">${dur(c.latency_ms)} · ${c.prompt_chars}→${c.response_chars} chars</span>`
+              : `<span class="num">${clock(a.created_at)}</span>`}
+        </div>
+        ${c ? `<details><summary>prompt and response</summary>
+            <pre>${esc(c.prompt.length > 14000 ? c.prompt.slice(0, 14000) + "\n… [truncated]" : c.prompt)}</pre>
+            <div class="m" style="padding:var(--s2) var(--s4); color:var(--t3); border-top:1px solid var(--line-soft)">response</div>
+            <pre>${esc(c.response)}</pre></details>`
+          : `<button class="loadbtn" data-load="${a.id}">load call</button>`}
+      </div>`;
+    }).join("")}</div>`;
+}
+
+function paneTimeline() {
+  if (!state.events.length) return `<div class="empty"><b>No events</b></div>`;
+  return `<div class="block"><div class="tl">${state.events.map(e => {
+    const d = e.detail && typeof e.detail === "object" ? e.detail : {};
+    const txt = Object.entries(d)
+      .filter(([, v]) => v !== "" && v != null && !(Array.isArray(v) && !v.length))
+      .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : typeof v === "object" ? JSON.stringify(v) : v}`)
+      .join("  ");
+    const mark = e.phase === "start" ? "▶" : e.status === "error" ? "✕" : "✓";
+    const cls = e.phase === "start" ? "" : e.status === "error" ? "err" : "ok";
+    return `<div>${clock(e.created_at)}</div>
+      <div class="node">${esc(LABEL[e.node] || e.node)}</div>
+      <div class="${cls}">${mark}</div>
+      <div class="txt" title="${esc(txt)}">${esc(txt)}</div>
+      <div class="ms">${dur(e.duration_ms)}</div>`;
+  }).join("")}</div></div>`;
+}
+
+/* page 4: workspace, command-line disclosure */
+function viewWorkspace() {
+  if (!state.run)
+    return `<div class="empty"><b>No run selected</b>Pick a run in <a href="#/runs" style="color:var(--accent)">Runs</a> first.</div>`;
+
+  const { rows, mapArt, digest } = workspaceFiles();
+  const workdir = lastEv("clone")?.detail?.workdir || "(workdir released)";
+
+  const ctx = `${esc(state.run.branch || state.run.instance_id || "")} · ${
+    esc((state.run.commit_sha || "").slice(0, 7))} · ${esc(state.run.status)}`;
+
+  if (mapArt && !digest)
+    return `<div class="prose"><p class="eyebrow">${ctx}</p>
+      <h2>${esc(state.run.repo)}</h2>
+      <div class="term"><div class="cmd"><span class="ps1">$</span> agent ls --workspace
+        <span class="path">${esc(workdir)}</span></div>
+        <button class="loadbtn" data-load="${mapArt.id}">load file index (${bytes(mapArt.size)})</button></div></div>`;
+
+  if (!rows.length)
+    return `<div class="empty"><b>No file index</b>This run never built a repo map.</div>`;
+
+  return `<div class="prose" style="max-width:none">
+    <p class="eyebrow">${ctx}</p>
+    <h2>${esc(state.run.repo)}</h2>
+    <p class="lede" style="margin-bottom:var(--s5)">Every file the agent had in scope. Expand one to
+      see what it did with it. The same view the patch node worked from.</p>
+
+    <div class="term">
+      <div class="cmd"><span class="ps1">$</span> agent ls --workspace
+        <span class="path">${esc(workdir)}</span>
+        <span class="spacer"></span>
+        <span class="path">${rows.length} files · ${digest?.symbol_count ?? 0} symbols · ${
+          Object.entries(digest?.languages || {}).map(([k, v]) => k + " " + v).join(", ")}</span>
+      </div>
+      ${rows.map((f, i) => fileRow(f, i)).join("")}
+      <div class="cmd" style="border:0; border-top:1px solid var(--line-soft)">
+        <span class="ps1">$</span> <span class="path">_</span></div>
+    </div>
+  </div>`;
+}
+
+function fileRow(f, i) {
+  const open = !!state.open[f.path];
+  const badge = f.edited ? `<span class="badge edited">● edited</span>`
+    : f.focus ? `<span class="badge focus">◐ in scope</span>`
+    : f.is_test ? `<span class="badge test">○ test</span>` : `<span class="badge"></span>`;
+  return `
+    <button class="frow" data-path="${esc(f.path)}" aria-expanded="${open}">
+      <span class="caret">▸</span>
+      <span class="p">${esc(f.path)}</span>
+      <span class="meta">${esc(f.lang || "-")}</span>
+      <span class="meta">${f.symbols == null ? "-" : f.symbols + " sym"}</span>
+      ${badge}
+    </button>
+    ${open ? `<div class="fbody">
+      <div class="cmd"><span class="ps1">$</span> agent ${f.edited ? "show --edit" : "inspect"} ${esc(f.path)}</div>
+      ${f.edited ? fixBlock(f.edited)
+        : `<div class="pad" style="font:400 12px/1.6 var(--mono); color:var(--t3)">
+            ${f.size == null ? "" : bytes(f.size) + " · "}${f.symbols ?? 0} symbols · ${f.imports ?? 0} imports
+            ${f.is_test ? "<br>test file, never sent to the model" : ""}
+            ${f.focus ? "<br>selected by the localizer as a candidate" : ""}
+          </div>`}
+    </div>` : ""}`;
+}
+
+/* ── events ─────────────────────────────────────────────────────────────── */
+
+function wire() {
+  $$(".run").forEach(b => b.onclick = () => selectRun(b.dataset.id));
+  $$(".tab").forEach(b => b.onclick = () => { state.tab = b.dataset.tab; render(); });
+  $$("[data-load]").forEach(b => b.onclick = () => body(Number(b.dataset.load)));
+  $$("[data-file]").forEach(b => b.onclick = () => { state.file = b.dataset.file; render(); });
+  $$("[data-view]").forEach(b => b.onclick = () => go(b.dataset.view));
+  $$(".frow").forEach(b => b.onclick = async () => {
+    const p = b.dataset.path;
+    state.open[p] = !state.open[p];
+    const { rows } = workspaceFiles();
+    const f = rows.find(r => r.path === p);
+    if (state.open[p] && f?.edited && state.bodies[f.edited.id] === undefined) await body(f.edited.id);
+    else render();
+  });
+  const sel = $("#srcfilter");
+  if (sel) sel.onchange = () => { state.runId = null; state.run = null; loadRuns(sel.value); };
+  // keep the node currently executing in view while a run streams
+  const active = $(".step.active");
+  if (active) active.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+  // the workspace needs the repo map body; fetch it once, lazily
+  if (state.view === "workspace" && state.run) {
+    const m = arts("repo_map")[0];
+    if (m && state.bodies[m.id] === undefined) body(m.id);
+  }
+}
+
+/* ── boot ───────────────────────────────────────────────────────────────── */
+
+const initial = location.hash.replace("#/", "");
+state.view = VIEW_TITLE[initial] ? initial : "runs";
+go(state.view);
+loadRuns();
+setInterval(() => { if (!state.es) loadRuns(); }, 12000);
+</script>
+</body>
+</html>

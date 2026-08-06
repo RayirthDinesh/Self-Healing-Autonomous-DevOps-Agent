@@ -8,3 +8,9 @@ venv/
 .env
 agent/.env
 *.key
+
+# local run artifacts and scratch clones
+logs/
+sre-demo-app/
+demo-repos/
+sre-agent-free.agent*.json
