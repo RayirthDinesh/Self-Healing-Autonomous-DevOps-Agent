@@ -91,7 +91,8 @@ def demo_like_repo(tmp_path):
     '''))
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_aggregator.py").write_text(
-        "from src.aggregator import max_value\n\ndef test_max():\n    assert max_value([1, 5]) == 5\n"
+        "from src.aggregator import max_value\n\n"
+        "def test_max():\n    assert max_value([1, 5]) == 5\n"
     )
     (tmp_path / "requirements.txt").write_text("pytest\n")
     return tmp_path
@@ -105,11 +106,36 @@ def test_buggy_file_lands_in_full_tier(demo_like_repo):
     assert "sorted(transactions)[0]" in ctx.full["src/aggregator.py"]
 
 
-def test_test_files_never_in_context(demo_like_repo):
+def test_only_the_failing_test_file_is_shown(demo_like_repo):
+    """The fixer sees the assertions it has to satisfy, and nothing more.
+
+    Showing the failing test is safe because the fixer may not write to it -
+    the guardrail in graph_nodes drops any fix touching tests/ (covered by
+    test_fixer_guardrail_drops_protected_paths). What must not happen is the
+    rest of the suite leaking in as general context.
+    """
     m = build_map("o/r", "s", str(demo_like_repo))
     ctx = select_context(PYTEST_LOG, m, str(demo_like_repo))
-    assert not any(p.startswith("tests") for p in ctx.full)
-    assert not any(p.startswith("tests") for p in ctx.signatures)
+
+    shown = [p for p in ctx.full if m["files"][p]["is_test"]]
+    assert shown == ["tests/test_aggregator.py"], shown
+
+    # The ranked tiers are built from source files only - a test file has no
+    # business being suggested as a place to look or edit.
+    assert not any(m["files"][p]["is_test"] for p in ctx.signatures)
+    assert not any(m["files"][p]["is_test"] for p in ctx.overview)
+
+
+def test_unimplicated_test_files_stay_out(demo_like_repo):
+    """A test file the failure never mentions is not context."""
+    (demo_like_repo / "tests" / "test_ingestion.py").write_text(
+        "from src.ingestion import load\n\ndef test_load():\n    assert load('x')\n"
+    )
+    m = build_map("o/r", "s", str(demo_like_repo))
+    ctx = select_context(PYTEST_LOG, m, str(demo_like_repo))
+
+    everything = set(ctx.full) | set(ctx.signatures) | set(ctx.overview)
+    assert "tests/test_ingestion.py" not in everything
 
 
 def test_graph_neighbor_gets_signature_tier(demo_like_repo):
@@ -133,10 +159,34 @@ def test_install_failure_puts_requirements_full(demo_like_repo):
 
 
 def test_full_tier_cap_respected(demo_like_repo, monkeypatch):
+    """CONTEXT_FULL_MAX caps the source files sent at full content.
+
+    Failing test files ride a separate, smaller budget, so they are excluded
+    from this count - see test_failing_test_files_are_capped.
+    """
     monkeypatch.setenv("CONTEXT_FULL_MAX", "1")
     m = build_map("o/r", "s", str(demo_like_repo))
     ctx = select_context(PYTEST_LOG + IMPORT_LOG, m, str(demo_like_repo))
-    assert len(ctx.full) <= 1
+    source_full = [p for p in ctx.full if not m["files"][p]["is_test"]]
+    assert len(source_full) <= 1, source_full
+
+
+def test_failing_test_files_are_capped(demo_like_repo):
+    """A failure naming many test files must not blow the context budget."""
+    log = PYTEST_LOG
+    for n in range(4):
+        name = f"test_extra{n}.py"
+        (demo_like_repo / "tests" / name).write_text(
+            "from src.aggregator import max_value\n\n"
+            f"def test_e{n}():\n    assert max_value([1]) == 1\n"
+        )
+        log += f"\nFAILED tests/{name}::test_e{n} - assert 0 == 1\n"
+
+    m = build_map("o/r", "s", str(demo_like_repo))
+    ctx = select_context(log, m, str(demo_like_repo))
+
+    shown = [p for p in ctx.full if m["files"][p]["is_test"]]
+    assert len(shown) <= 2, shown
 
 
 def test_bm25_ranks_named_file_first(demo_like_repo):

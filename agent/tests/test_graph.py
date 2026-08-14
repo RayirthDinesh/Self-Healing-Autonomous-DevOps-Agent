@@ -29,8 +29,11 @@ LOG = (
 
 TRIAGE = '{"summary": "NameError in src/app.py", "suspects": ["src/app.py"]}'
 LOCATE = '{"files": ["src/app.py"], "reason": "traceback"}'
-FIX = json.dumps({"diagnosis": "typo: totl -> total",
-                  "fixes": [{"filename": "src/app.py", "content": "def add(a, b):\n    return a + b\n"}]})
+FIX = json.dumps({
+    "diagnosis": "typo: totl -> total",
+    "fixes": [{"filename": "src/app.py",
+               "content": "def add(a, b):\n    return a + b\n"}],
+})
 APPROVE = '{"verdict": "approve", "feedback": "looks right"}'
 REVISE = '{"verdict": "revise", "feedback": "you deleted a function"}'
 
@@ -38,7 +41,7 @@ REVISE = '{"verdict": "revise", "feedback": "you deleted a function"}'
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
     """Isolated memory DB, scripted LLM, stubbed git/docker/GitHub effects."""
-    calls = {"chat": [], "test_results": [], "pushed": False, "pr": False, "cloned": 0}
+    calls = {"chat": [], "test_results": [], "pushed": False, "pr": False, "reset": 0}
 
     monkeypatch.setenv("MEMORY_DB", str(tmp_path / "memory.db"))
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
@@ -60,12 +63,18 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setattr(graph_nodes, "get_diff", lambda path: "fake diff")
     monkeypatch.setattr(graph_nodes, "run_tests",
                         lambda path: (calls["test_results"].pop(0), "suite output"))
-    monkeypatch.setattr(graph_nodes, "clone_branch",
-                        lambda repo, branch, dest: calls.__setitem__("cloned", calls["cloned"] + 1))
+    # Between failed attempts the validator restores the clone to pristine
+    # HEAD. Stubbed because the fixture's workdir is a bare tmp_path, not a
+    # real repo. See test_workdir_reset.py for the behaviour itself.
+    monkeypatch.setattr(graph_nodes, "reset_to_head",
+                        lambda path: calls.__setitem__("reset", calls["reset"] + 1))
+
     def fake_push(workdir, fix_branch, token, repo):
         calls["pushed"] = True
-        # the real one may suffix the name; the PR must follow what was pushed
+        # The real one may suffix the name, and the PR must follow what was
+        # actually pushed.
         return calls.get("push_returns", fix_branch)
+
     monkeypatch.setattr(graph_nodes, "commit_and_push", fake_push)
     monkeypatch.setattr(graph_nodes, "create_pull_request",
                         lambda **k: calls.__setitem__("pr_head", k["head"])
@@ -123,10 +132,29 @@ def test_red_attempts_exhaust_to_reflect(wired):
     assert final["done"] == "gave_up"
     assert final["attempt"] == 3
     assert not wired["calls"]["pushed"]
-    assert wired["calls"]["cloned"] == 3          # workdir reset after each red
+    assert wired["calls"]["reset"] == 3           # workdir reset after each red
     with memory._connect() as conn:
         greens = [g for (g,) in conn.execute("SELECT suite_green FROM incidents")]
     assert greens == [0, 0, 0]                    # negative examples recorded
+
+
+def test_failed_reset_stands_down_instead_of_burning_attempts(wired, monkeypatch):
+    """A tree that could not be restored still holds the last failed patch.
+
+    Continuing would have the fixer patching unknown content, and the attempts
+    fail on "file not found" rather than on the merits of the fix - so the run
+    ends after the first red instead of spending the whole budget.
+    """
+    wired["script"][:] = [TRIAGE] + [LOCATE, FIX, APPROVE] * 3
+    wired["calls"]["test_results"][:] = [False, False, False]
+    monkeypatch.setattr(graph_nodes, "reset_to_head",
+                        lambda path: (_ for _ in ()).throw(RuntimeError("git clean failed")))
+
+    final = wired["invoke"]()
+
+    assert final["done"] == "gave_up"
+    assert final["attempt"] == 1                  # stopped, did not try 2 and 3
+    assert not wired["calls"]["pushed"]
 
 
 def test_critic_revise_loops_back_to_fixer_once(wired):

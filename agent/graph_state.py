@@ -12,7 +12,7 @@ class AgentState(TypedDict, total=False):
     test_logs: str
     workdir: str
 
-    # Ingest products (Phase 1 memory + repo map)
+    # Ingest products: repo memory and the symbol map
     error_class: str
     blame: dict                 # {path: weight 0..1}
     incidents: list             # past-incident few-shots
@@ -28,7 +28,7 @@ class AgentState(TypedDict, total=False):
     candidate_files: list       # paths the fixer will see in full
     context: dict               # {path: content} loaded for the fixer
     failure_feedback: str       # validator output fed into the retry loop
-    last_fix_diff: str          # diff of the last failed attempt - never repeat it
+    last_fix_diff: str          # diff of the last failed attempt, never repeated
 
     # Fixer / critic
     diagnosis: str
@@ -40,6 +40,7 @@ class AgentState(TypedDict, total=False):
     attempt: int                # validator attempts used
     llm_calls: int
     passed: bool
+    reset_failed: bool          # workdir no longer pristine, so retrying is moot
     test_output: str
     incident_id: Optional[int]
     pr_url: str

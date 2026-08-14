@@ -17,12 +17,13 @@ from langgraph.graph import END, StateGraph
 import graph_nodes as nodes
 import run_tracker
 from graph_state import AgentState
-from repo_ops import clone_branch
+from repo_ops import ValidatorUnavailable, clone_branch
 
 logger = logging.getLogger("sre-agent-webhook")
 
 
 def build_graph(checkpointer=None):
+    """Wire the nodes and edges above into a compiled LangGraph app."""
     g = StateGraph(AgentState)
     g.add_node("ingest", nodes.ingest)
     g.add_node("router", nodes.router)
@@ -52,7 +53,7 @@ def build_graph(checkpointer=None):
 
 
 def _checkpointer():
-    """SqliteSaver when available - optional, never blocks a run."""
+    """SqliteSaver when it is available. Checkpointing never blocks a run."""
     try:
         import sqlite3
         from langgraph.checkpoint.sqlite import SqliteSaver
@@ -66,7 +67,7 @@ def _checkpointer():
 
 def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str,
               source: str = "webhook"):
-    """Graph-mode equivalent of pipeline.run - same inputs, same side effects."""
+    """Run one CI failure through the graph. Called by pipeline.run."""
     logger.info("=== Graph pipeline started | branch=%s commit=%s ===", branch, commit_sha)
     run_tracker.start_run(repo, branch, commit_sha, source=source, mode="graph")
     run_tracker.artifact("ci_logs", "failing CI output", test_logs)
@@ -97,6 +98,20 @@ def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str,
                 "tags": ["sre-agent", branch],
                 "metadata": {"repo": repo, "branch": branch, "commit": commit_sha},
             })
+        except nodes.ProviderUnavailable as e:
+            # Not a failed fix attempt: the model was never reachable. Report
+            # that plainly instead of as three exhausted attempts.
+            logger.error("Model provider unavailable, standing down: %s", e)
+            run_tracker.step("llm", status="error", detail={"error": str(e)})
+            run_tracker.finish_run("error", "provider_unavailable")
+            return
+        except ValidatorUnavailable as e:
+            # No suite ever ran, so there is nothing to call red. Reporting this
+            # as a failed fix would blame the patch for a missing daemon.
+            logger.error("Validator unavailable, standing down: %s", e)
+            run_tracker.step("validator", status="error", detail={"error": str(e)})
+            run_tracker.finish_run("error", "validator_unavailable")
+            return
         except Exception as e:
             logger.error("Graph run failed: %s", e)
             run_tracker.finish_run("error", f"{type(e).__name__}: {e}")
