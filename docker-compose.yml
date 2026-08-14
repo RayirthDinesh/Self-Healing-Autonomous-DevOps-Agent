@@ -1,0 +1,74 @@
+# One-command run:  cp agent/.env.example agent/.env && $EDITOR agent/.env
+#                   docker compose up --build
+#
+# Webhook:  http://localhost:8000/webhook   (X-Webhook-Secret header)
+# Health:   http://localhost:8000/health
+# Console:  http://localhost:8000/ui?key=<WEBHOOK_SECRET or DASHBOARD_SECRET>
+#
+# Linux and macOS. On Windows use WSL2 - see the note on AGENT_WORKSPACE below.
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sre-agent:local
+    container_name: sre-agent
+    restart: unless-stopped
+    env_file:
+      - agent/.env
+    ports:
+      # Bound to all interfaces because GitHub Actions has to reach it. If you
+      # are only testing locally, change this to "127.0.0.1:8000:8000".
+      - "8000:8000"
+    environment:
+      # The agent clones each failing branch into a temp dir, then starts a
+      # SECOND container to run the suite against it. That container is created
+      # on the host's Docker daemon, so the daemon resolves the bind-mount
+      # source as a HOST path. A path that exists only inside this container
+      # would silently mount as an empty directory and every suite would fail
+      # to collect.
+      #
+      # The fix is to make one directory exist at the same absolute path in
+      # both places: bind it host->container 1:1 below, and point TMPDIR at it
+      # so tempfile puts the clones there.
+      TMPDIR: ${AGENT_WORKSPACE:-/var/tmp/sre-agent}
+    volumes:
+      # Lets the agent start the validator container. This is effectively root
+      # on the host - see SECURITY.md before exposing this service.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Identical path on both sides, for the reason described above.
+      - ${AGENT_WORKSPACE:-/var/tmp/sre-agent}:${AGENT_WORKSPACE:-/var/tmp/sre-agent}
+      # Runs, incidents and the repo map cache survive a rebuild.
+      - agent-data:/data
+
+  # Optional standalone console on its own port:  docker compose --profile console up
+  #
+  # Published to loopback only, but the app cannot see that from inside the
+  # container - it sees a 0.0.0.0 bind and refuses to start without a secret,
+  # so DASHBOARD_SECRET must be set in agent/.env. To read runs with no secret
+  # at all, run it on the host instead: python agent/dashboard.py
+  console:
+    profiles: ["console"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sre-agent:local
+    container_name: sre-agent-console
+    restart: unless-stopped
+    command: ["python", "dashboard.py"]
+    env_file:
+      - agent/.env
+    environment:
+      DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: "8001"
+    ports:
+      - "127.0.0.1:8001:8001"
+    volumes:
+      # Read-write even though the console only reads: SQLite needs to create
+      # the -wal and -shm sidecars next to the database, and a read-only mount
+      # makes every query fail with "unable to open database file".
+      - agent-data:/data
+
+volumes:
+  agent-data:

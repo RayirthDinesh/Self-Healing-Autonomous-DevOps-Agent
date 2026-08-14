@@ -1,5 +1,9 @@
 # Self-Healing Autonomous SRE Agent
 
+[![CI](https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+
 An autonomous agent that watches a repo's CI. When a build or test run fails,
 GitHub Actions POSTs the logs to this agent's webhook server; the agent clones
 the failing branch, retrieves the most relevant source files using hybrid RAG,
@@ -34,27 +38,67 @@ push to bug/* ─→ CI fails ─→ POST logs to webhook (FastAPI, port 8000)
               red?  ─→ regression feedback ─→ retry once, then stand down
 ```
 
+## Quick start
+
+Two things are needed before anything runs: **Docker** (the fix is validated in
+a throwaway container) and an **OpenRouter API key**.
+
+```bash
+git clone https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent.git
+cd Self-Healing-Autonomous-DevOps-Agent
+cp agent/.env.example agent/.env     # fill in OPENROUTER_API_KEY and WEBHOOK_SECRET
+docker compose up --build            # webhook on :8000
+```
+
+Then drive a complete run against a canned real CI failure — no repo of your
+own to break first, no CI to wait for:
+
+```bash
+scripts/try-it.sh                    # posts examples/sample-payload.json
+```
+
+Watch it at `http://localhost:8000/ui?key=<WEBHOOK_SECRET>` — under Compose the
+run history lives in a container volume, so use the console the server itself
+serves rather than starting one on the host.
+
+That payload is genuine pytest output from `bug/easy-1-nameerror`, so it drives
+the whole production path: clone, map, retrieve, patch, validate in Docker, PR.
+Leave `GITHUB_TOKEN` unset and the run stops cleanly after validation instead of
+trying to push.
+
+Prefer a virtualenv to Docker Compose? `pip install -r agent/requirements.txt`
+then `cd agent && python main.py`. Full detail in
+[agent/README.md](agent/README.md).
+
 ## Layout
 
 ```
-agent/
-├── main.py           # FastAPI webhook server (X-Webhook-Secret auth, /health)
-├── models.py         # WebhookPayload schema
-├── pipeline.py       # orchestrator: clone → retrieve → fix → validate → PR
-├── retrieval.py      # tiered context selection: full / signatures / overview
-├── repo_map.py       # tree-sitter AST graph + PageRank over the import graph
-├── chunker.py        # function-level code chunking for semantic search
-├── embeddings.py     # fastembed semantic similarity scoring
-├── llm_client.py     # OpenRouter call, strict JSON search/replace format
-├── repo_ops.py       # git clone/apply/test/push (subprocess + Docker)
-├── github_ops.py     # PR creation via GitHub REST API
-├── memory.py         # incident store: blame priors + few-shot retrieval
-├── agent_graph.py    # LangGraph multi-agent mode (triage→fixer→critic→validator)
-├── run_tracker.py    # SQLite event log every pipeline run writes to
-├── dashboard.py      # read-only web UI + SSE streaming API over that log
-├── static/           # dashboard.html (single file, no build step)
-└── scripts/
-    └── replay_bugs.py  # replay all demo bug branches; --live calls the LLM
+.
+├── docker-compose.yml    # webhook + optional console, one command
+├── Dockerfile            # runtime image (git + docker CLI + deps)
+├── examples/             # sample-payload.json: a real captured CI failure
+├── scripts/
+│   ├── try-it.sh             # post the sample payload at a running server
+│   └── capture-payload.sh    # build a payload from any repo/branch
+└── agent/
+    ├── main.py           # FastAPI webhook server (X-Webhook-Secret auth, /health)
+    ├── models.py         # WebhookPayload schema
+    ├── config.py         # env-backed settings: validator image, PR base branch
+    ├── pipeline.py       # orchestrator: clone → retrieve → fix → validate → PR
+    ├── retrieval.py      # tiered context selection: full / signatures / overview
+    ├── repo_map.py       # tree-sitter AST graph + PageRank over the import graph
+    ├── chunker.py        # function-level code chunking for semantic search
+    ├── embeddings.py     # fastembed semantic similarity scoring
+    ├── llm_client.py     # OpenRouter call, strict JSON search/replace format
+    ├── repo_ops.py       # git clone/apply/test/push (subprocess + Docker)
+    ├── github_ops.py     # PR creation via GitHub REST API
+    ├── memory.py         # incident store: blame priors + few-shot retrieval
+    ├── agent_graph.py    # LangGraph multi-agent mode (triage→fixer→critic→validator)
+    ├── graph_nodes.py    # the nodes themselves, one function per agent
+    ├── run_tracker.py    # SQLite event log every pipeline run writes to
+    ├── dashboard.py      # read-only web UI + SSE streaming API over that log
+    ├── static/           # dashboard.html (single file, no build step)
+    └── tests/            # pytest suite, run in CI on 3.11 and 3.12
 ```
 
 ## Benchmark results
@@ -86,9 +130,9 @@ Clone the repo, run it, watch your own runs. No configuration:
 python agent/dashboard.py        # http://127.0.0.1:8001/ui
 ```
 
-Runs from the webhook server, `scripts/replay_bugs.py`, and the SWE-bench
-harness all write to the same SQLite file (`~/.sre-agent/memory.db`, override
-with `MEMORY_DB`) and appear in one place.
+Runs from the webhook server and from the SWE-bench harness write to the same
+SQLite file (`~/.sre-agent/memory.db`, override with `MEMORY_DB`), so pointing
+both at one path shows them in one place.
 
 ### Access
 
@@ -117,6 +161,9 @@ Over the public internet, put TLS in front or use `ssh -L 8001:localhost:8001`.
   tests, the LLM is told exactly which tests regressed before it tries again.
 - **Server answers instantly** — the pipeline runs as a FastAPI background task
   so GitHub's webhook call never times out.
+- **Retries only what retrying can fix** — a bad key, exhausted credits, or a
+  retired model id stops the run on the first call with the actual reason,
+  rather than spending the whole attempt budget failing the same way.
 
 ## Setup
 
@@ -136,6 +183,31 @@ The short version:
    `http://<server>:8000/webhook` with the `X-Webhook-Secret` header.
 3. Add `WEBHOOK_URL` and `WEBHOOK_SECRET` as Actions secrets.
 
-Your target repo needs to be public, have `requirements.txt` at its root, and
-have a suite that passes under `python:3.11-slim` — that is the exact image
-the validator uses.
+Your target repo needs `requirements.txt` at its root and a suite that passes
+inside the validator container. Everything else adapts through the environment
+rather than a source edit:
+
+| If your repo… | Set |
+|---|---|
+| is private | `GITHUB_TOKEN` — the clone authenticates with it |
+| does not default to `main` | `PR_BASE_BRANCH` |
+| needs system packages or another Python | `VALIDATOR_IMAGE` |
+| has a slow suite | `VALIDATOR_TIMEOUT` |
+
+[agent/.env.example](agent/.env.example) is the complete environment reference.
+
+## Contributing
+
+Issues and pull requests welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for
+setup, how to run the tests, and the invariants worth knowing before changing
+them.
+
+## Security
+
+The agent executes model-written code and holds a token that can write to your
+repository. [SECURITY.md](SECURITY.md) covers the threat model, how to scope
+the token, and how to report a vulnerability privately.
+
+## Licence
+
+[Apache 2.0](LICENSE).

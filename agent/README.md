@@ -34,10 +34,10 @@ checking them before deploying anything.
 
 | Requirement | Why |
 |---|---|
-| **Public GitHub repo** | The agent clones over plain HTTPS with no credentials (`repo_ops.clone_branch`). Private repos will not clone until you change that call to embed a token. |
 | **`requirements.txt` at the repo root** | The validator container runs `pip install -r requirements.txt` before the suite. No file, no run. |
-| **`pytest` passes on `python:3.11-slim`** | That is the exact image the validator uses. If your suite needs system packages, a database, or a different Python, the validator will never go green and no PR will ever open. |
-| **`main` is the PR base** | `create_pull_request` targets `main`. Change it in `github_ops.py` if your default branch differs. |
+| **`pytest` passes in the validator image** | Default `python:3.11-slim`. If the suite needs system packages, a database, or a different Python, the validator never goes green and no PR ever opens - point `VALIDATOR_IMAGE` at an image that has what it needs. |
+| **A GitHub token, for anything but a public read** | Public repos clone anonymously. Private ones need `GITHUB_TOKEN`, which is also what pushes the branch and opens the PR. |
+| **The right PR base** | Defaults to `main`. Set `PR_BASE_BRANCH` if the target's default branch is something else - a wrong value throws away a fix that already went green. |
 
 The agent will refuse to edit anything under `tests/`, `agent/`, `.git/` or
 `.github/`, or any path containing `/test`. That is deliberate: it is what stops
@@ -49,59 +49,67 @@ a failing assertion from being "fixed" by deleting the assertion.
 
 Prove the pipeline works on your machine before putting it on a VM.
 
-```bash
-git clone https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent.git
-cd Self-Healing-Autonomous-DevOps-Agent/agent
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-You also need **Docker running**, because the validator runs the suite in a
-container. Without it every attempt reports red and nothing is ever published.
+**Docker must be running** either way, because the validator runs the suite in
+a container. Without it every attempt reports red and nothing is ever
+published.
 
 ```bash
 docker run --rm python:3.11-slim python -c "print('docker ok')"
 ```
 
-Create `agent/.env` (see the reference below), then start the server:
+### With Docker Compose
 
 ```bash
-python main.py                 # webhook server on :8000
+git clone https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent.git
+cd Self-Healing-Autonomous-DevOps-Agent
+cp agent/.env.example agent/.env     # fill in OPENROUTER_API_KEY and WEBHOOK_SECRET
+docker compose up --build            # webhook on :8000
 ```
 
-Give it a real run. There is no simulation mode: the only way in is the same
-`/webhook` payload GitHub Actions posts, carrying real pytest output. Capture
-some from a branch that genuinely fails, then post it:
+The compose file bind-mounts the Docker socket so the agent can start the
+validator container, and maps one workspace directory to the same absolute path
+inside and outside the container. That second part is not cosmetic: the
+validator container is created on the *host* daemon, so the clone's path has to
+mean the same thing on both sides or the suite mounts an empty directory.
+
+### With a virtualenv
 
 ```bash
-git clone -b bug/easy-1-nameerror https://github.com/RayirthDinesh/sre-demo-app /tmp/demo
-(cd /tmp/demo && pytest -v --tb=long > run.log 2>&1)
+git clone https://github.com/RayirthDinesh/Self-Healing-Autonomous-DevOps-Agent.git
+cd Self-Healing-Autonomous-DevOps-Agent
+python3.11 -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -r agent/requirements.txt
+cp agent/.env.example agent/.env
+cd agent && python main.py           # webhook server on :8000
+```
 
-python3 - > payload.json <<'PY'
-import json, subprocess
-sha = subprocess.run(["git", "-C", "/tmp/demo", "rev-parse", "HEAD"],
-                     capture_output=True, text=True).stdout.strip()
-print(json.dumps({
-    "repo": "RayirthDinesh/sre-demo-app",
-    "branch": "bug/easy-1-nameerror",
-    "commit_sha": sha,
-    "test_logs": open("/tmp/demo/run.log").read(),
-    "status": "failure",
-}))
-PY
+### Give it a real run
 
+There is no simulation mode: the only way in is the same `/webhook` payload
+GitHub Actions posts, carrying real pytest output. One is committed, captured
+from `bug/easy-1-nameerror` on the demo repo:
+
+```bash
+scripts/try-it.sh                    # posts examples/sample-payload.json
+```
+
+From there it is the production path: clone, map, retrieve, patch, validate in
+Docker, and a PR if `GITHUB_TOKEN` is set. Watch it happen in the console:
+
+```bash
+python agent/dashboard.py            # http://127.0.0.1:8001/ui
+```
+
+To drive a different branch, or your own repo, build a fresh payload the same
+way CI would:
+
+```bash
+scripts/capture-payload.sh RayirthDinesh/sre-demo-app bug/logic-error payload.json
 curl -sS -X POST http://127.0.0.1:8000/webhook \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
   -d @payload.json
-```
-
-From there it is the production path: clone, map, patch, validate in Docker,
-and a PR if `GITHUB_TOKEN` is set. Watch it happen in the console:
-
-```bash
-python dashboard.py            # http://127.0.0.1:8001/ui
 ```
 
 ---
@@ -115,11 +123,17 @@ python dashboard.py            # http://127.0.0.1:8001/ui
 | `OPENROUTER_API_KEY` | yes | Model access. Get one at openrouter.ai. |
 | `WEBHOOK_SECRET` | for CI | Shared secret GitHub Actions sends as `X-Webhook-Secret`. |
 | `GITHUB_TOKEN` | to open PRs | Classic PAT with the `repo` scope, or a fine-grained token with Contents and Pull requests write on the target repo. Without it the agent still fixes and validates, then logs "skipping push and PR". |
-| `LLM_MODEL` | no | Default `tencent/hy3-preview`. Any OpenRouter model id works, including free ones such as `poolside/laguna-s-2.1:free`. |
+| `LLM_MODEL` | no | Default `poolside/laguna-s-2.1:free` - free, so a fresh clone runs with no credit on the account. Any OpenRouter model id works; a paid one is faster and more consistent at valid JSON. |
 | `TRIAGE_MODEL` | no | Cheaper model for the triage and review nodes. Falls back to `LLM_MODEL`. |
+| `PR_BASE_BRANCH` | no | Branch the auto-fix PR targets. Default `main`. |
+| `VALIDATOR_IMAGE` | no | Image the candidate fix is tested in. Default `python:3.11-slim`. Needs python and pip on PATH. |
+| `VALIDATOR_TIMEOUT` | no | Seconds for one validation run, covering `pip install` plus the suite. Default `300`. A timeout counts as a failed attempt, never a pass. |
 | `MEMORY_DB` | no | SQLite path. Default `~/.sre-agent/memory.db`. |
 | `DASHBOARD_HOST` / `DASHBOARD_PORT` | no | Console bind. Default `127.0.0.1:8001`. |
 | `DASHBOARD_SECRET` | when exposed | Read-only console secret. Falls back to `WEBHOOK_SECRET`. |
+
+[`.env.example`](.env.example) carries the same list with comments - copy it
+rather than writing one from scratch.
 
 **Write `.env` without a byte order mark.** A BOM makes the first key parse as
 `﻿WEBHOOK_SECRET`, so the real variable stays unset and every request 401s.
@@ -340,12 +354,14 @@ console as access to the source of whatever repo the agent watches.
 | `Invalid HTTP request received`, no 401 and no 422 | Trailing newline in a GitHub secret. The workflow above strips whitespace. |
 | CI posts, server returns 422 | Old uvicorn h11 parser mishandling `Expect: 100-continue`. `main.py` already runs `http="httptools"`; make sure `uvicorn[standard]` is installed. |
 | Fixes always report red, tests pass by hand | Docker is missing, stopped, or the service user is not in the `docker` group. |
-| `HTTP 402 Payment Required` in the logs | OpenRouter balance exhausted. Switch `LLM_MODEL` to a `:free` model or top up. |
-| `404 ... unavailable for free`, every node falls back and the run gives up | A `:free` slug stopped being free. OpenRouter retires them without notice, so pick another from `https://openrouter.ai/api/v1/models` (filter ids ending in `:free`) and smoke test it before deploying. |
+| `Model provider unavailable, standing down` | The provider refused in a way retrying cannot fix - 401 (bad key), 402 (no credits), 403 (model not permitted), 404 (model id gone). The message says which. The run stops on the first one rather than burning its attempt budget, and the console shows `provider_unavailable`. |
+| `404 ... unavailable for free` | A `:free` slug stopped being free. OpenRouter retires them without notice, so pick another from `https://openrouter.ai/api/v1/models` (filter ids ending in `:free`) and smoke test it before deploying. |
 | Agent fixes the suite but opens no PR | `GITHUB_TOKEN` unset or lacking the `repo` scope. The log says "skipping push and PR". |
 | Console is empty | No runs recorded yet in that `MEMORY_DB`. Only runs executed after the run tracker was added appear; older history lives in the `incidents` table, which the console does not read. |
 | Console 401s in a browser on the VM | It is bound to a routable interface, so a secret is required. Use the SSH tunnel above. |
-| Clone fails on a private repo | `clone_branch` clones over unauthenticated HTTPS. Embed a token there to support private repos. |
+| Clone fails on a private repo | `GITHUB_TOKEN` is unset, or lacks Contents read on that repo. The clone only authenticates when it is set. |
+| `Validation timed out after 300s` | The suite plus `pip install` exceeded `VALIDATOR_TIMEOUT`. Raise it, or pre-bake the dependencies into a custom `VALIDATOR_IMAGE`. |
+| `docker was not found on PATH` | The validator cannot run without it. Install Docker and start the daemon. |
 
 Server logs: `sudo journalctl -u sre-agent -f`.
 
@@ -353,7 +369,10 @@ Server logs: `sudo journalctl -u sre-agent -f`.
 
 ## Cost
 
-Oracle Always Free covers the VM. The only recurring cost is model calls,
-typically four to twelve per run depending on retries. Free OpenRouter models
-work for the whole pipeline; they are slower and less reliable at producing
-valid JSON, which shows up as an occasional wasted attempt.
+Oracle Always Free covers the VM, and the default model is a `:free` OpenRouter
+slug, so the reference deployment costs nothing to run.
+
+The only thing that would cost money is switching `LLM_MODEL` to a paid model -
+typically four to twelve calls per run depending on retries. Worth it if the
+free tier's rate limits or JSON consistency start showing up as wasted
+attempts.
