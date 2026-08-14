@@ -1,6 +1,6 @@
-"""Persistent memory - SQLite mental map of the target repo plus incident history.
+"""Persistent memory: a SQLite map of the target repo plus incident history.
 
-Everything here is advisory: a memory failure must never kill a pipeline run,
+Everything here is advisory. A memory failure must never kill a pipeline run,
 so every public function degrades to a neutral value and logs a warning.
 """
 
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS fast_paths (
 );
 """
 
-# Ordered: first match wins
+# Ordered, first match wins.
 _ERROR_CLASSES = [
     ("install-failure", re.compile(
         r"ERROR: (?:No matching distribution|Could not find a version|Cannot install)"
@@ -103,21 +103,24 @@ _DIFF_PROMPT_LINES = 40
 
 
 def _db_path() -> str:
-    return os.environ.get(
+    # expanduser is applied to the override too. MEMORY_DB=~/... is the
+    # obvious thing to write in a .env, and without this it would create a
+    # directory literally named "~".
+    return os.path.expanduser(os.environ.get(
         "MEMORY_DB",
-        os.path.join(os.path.expanduser("~"), ".sre-agent", "memory.db"),
-    )
+        os.path.join("~", ".sre-agent", "memory.db"),
+    ))
 
 
 def _connect() -> sqlite3.Connection:
     path = _db_path()
-    # Owner-only: incident rows carry repo diffs and CI log excerpts
+    # Owner-only: incident rows carry repo diffs and CI log excerpts.
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     if not os.path.exists(path):
         os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
     conn = sqlite3.connect(path)
     conn.executescript(_SCHEMA)
-    # Guarded migrations - each a no-op once the column exists
+    # Guarded migrations. Each becomes a no-op once its column exists.
     for ddl in (
         "ALTER TABLE incidents ADD COLUMN signature TEXT",
         "ALTER TABLE incidents ADD COLUMN validator_output TEXT",
@@ -130,14 +133,15 @@ def _connect() -> sqlite3.Connection:
 
 
 def _never_fatal(default):
-    """Memory is advisory - log and return a neutral value on any failure."""
+    """Log any failure and return a neutral value, because memory is advisory."""
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                logger.warning("memory: %s failed (%s) - continuing without it", fn.__name__, e)
+                logger.warning("memory: %s failed (%s), continuing without it",
+                               fn.__name__, e)
                 return default() if callable(default) else default
         return wrapper
     return deco
@@ -154,6 +158,7 @@ def _embed(text: str):
 
 
 def classify_error(log: str) -> str:
+    """Bucket a failing CI log into one of _ERROR_CLASSES, or "other"."""
     for name, pattern in _ERROR_CLASSES:
         if pattern.search(log):
             return name
@@ -164,10 +169,11 @@ _TEST_FILE_RE = re.compile(r"(^|/)(tests?|__tests__)/|(^|/)test_[^/]*$|_test\.[a
 
 
 def failure_signature(test_logs: str) -> str:
-    """Composite fast-path key: error class + failing test files + traceback source.
+    """Composite fast-path key: error class, failing tests, traceback source.
 
-    Two failures with the same signature are 'the same bug shape' - the router
-    only skips triage/localization when this exact shape has merged before.
+    Two failures with the same signature count as the same bug shape. The
+    router only skips triage and localization when this exact shape has
+    produced a merged fix before.
     """
     from retrieval import parse_failure_log
     hits = parse_failure_log(test_logs)
@@ -177,7 +183,7 @@ def failure_signature(test_logs: str) -> str:
     return f"{classify_error(test_logs)}|{','.join(tests)}|{top_source}"
 
 
-# ── Repo mental map ──────────────────────────────────────────────────────────
+# --- Repo map ---
 
 @_never_fatal(list)
 def update_repo_state(repo: str, commit_sha: str, clone_path: str, repo_map: dict) -> list:
@@ -212,7 +218,7 @@ def update_repo_state(repo: str, commit_sha: str, clone_path: str, repo_map: dic
                     (repo, path, digest, entry.get("size", 0),
                      len(entry.get("symbols", [])), commit_sha, 0),
                 )
-        # Files that changed together in this pull are related
+        # Files that changed together in this pull are treated as related.
         for i, a in enumerate(sorted(changed)):
             for b in sorted(changed)[i + 1:]:
                 conn.execute(
@@ -227,20 +233,24 @@ def update_repo_state(repo: str, commit_sha: str, clone_path: str, repo_map: dic
             (repo, commit_sha, now),
         )
     if changed:
-        logger.info("memory: %d file(s) changed since last sync: %s", len(changed), changed)
+        logger.info("memory: %d file(s) changed since last sync: %s",
+                    len(changed), changed)
     return changed
 
 
-# ── Incidents ────────────────────────────────────────────────────────────────
+# --- Incidents ---
 
 @_never_fatal(None)
 def record_incident(repo: str, branch: str, commit_sha: str, test_logs: str,
                     diagnosis: str, files_fixed: list, fix_diff: str,
                     suite_green: bool, attempt: int, validator_output: str = ""):
-    """Store one fix attempt that reached the test suite. Returns the incident id.
+    """Store one fix attempt that reached the test suite.
 
-    validator_output - tail of the post-fix test run, so a red incident is
-    diagnosable from the DB alone (infra flake vs genuinely wrong fix).
+    validator_output is the tail of the post-fix test run, which makes a red
+    incident diagnosable from the database alone (an infrastructure flake
+    versus a genuinely wrong fix).
+
+    Returns the new incident id.
     """
     excerpt = test_logs[-_LOG_EXCERPT_CHARS:]
     vec = _embed(excerpt)
@@ -305,7 +315,7 @@ def similar_incidents(repo: str, test_logs: str, k: int = _SIM_CAP,
     else:
         error_class = classify_error(test_logs)
         scored = [(1.0, row) for row in rows if row[1] == error_class]
-        scored.sort(key=lambda item: -item[1][7])  # most recent first
+        scored.sort(key=lambda item: -item[1][7])  # by created_at, newest first
 
     results = []
     for score, row in scored[:k]:
@@ -322,14 +332,15 @@ def similar_incidents(repo: str, test_logs: str, k: int = _SIM_CAP,
     return results
 
 
-# ── PR fate + blame ──────────────────────────────────────────────────────────
+# --- PR fate and blame ---
 
 @_never_fatal(dict)
 def update_pr_fates(repo: str, github_token: str) -> dict:
     """Lazy sweep: resolve the fate of every still-open PR from past incidents.
 
-    merged  -> blame weight +1.0 for each fixed file under the error class
-    closed  -> blame weight *= 0.5 (decay)
+        merged  blame weight += 1.0 for each fixed file under the error class
+        closed  blame weight *= 0.5 (decay)
+
     Returns {pr_number: fate} for anything that changed state.
     """
     if not github_token:
@@ -356,18 +367,21 @@ def update_pr_fates(repo: str, github_token: str) -> dict:
                 fate = "closed"
             else:
                 continue  # still open
-            conn.execute("UPDATE incidents SET pr_state = ? WHERE id = ?", (fate, incident_id))
+            conn.execute("UPDATE incidents SET pr_state = ? WHERE id = ?",
+                         (fate, incident_id))
             if signature:
                 if fate == "merged":
                     conn.execute(
-                        "INSERT INTO fast_paths (repo, error_class, signature, target_files,"
-                        " merged_count, miss_count, updated_at) VALUES (?, ?, ?, ?, 1, 0, ?)"
+                        "INSERT INTO fast_paths (repo, error_class, signature,"
+                        " target_files, merged_count, miss_count, updated_at)"
+                        " VALUES (?, ?, ?, ?, 1, 0, ?)"
                         " ON CONFLICT(repo, error_class, signature) DO UPDATE SET"
-                        " merged_count = merged_count + 1, target_files = excluded.target_files,"
+                        " merged_count = merged_count + 1,"
+                        " target_files = excluded.target_files,"
                         " updated_at = excluded.updated_at",
                         (repo, error_class, signature, files_json, time.time()),
                     )
-                else:  # rejected PR: the fast path (if any) produced a bad fix
+                else:  # A rejected PR means the fast path produced a bad fix.
                     conn.execute(
                         "UPDATE fast_paths SET miss_count = miss_count + 1"
                         " WHERE repo = ? AND signature = ?",
@@ -376,8 +390,10 @@ def update_pr_fates(repo: str, github_token: str) -> dict:
             for path in json.loads(files_json or "[]"):
                 if fate == "merged":
                     conn.execute(
-                        "INSERT INTO blame (repo, path, error_class, weight) VALUES (?, ?, ?, 1.0)"
-                        " ON CONFLICT(repo, path, error_class) DO UPDATE SET weight = weight + 1.0",
+                        "INSERT INTO blame (repo, path, error_class, weight)"
+                        " VALUES (?, ?, ?, 1.0)"
+                        " ON CONFLICT(repo, path, error_class) DO UPDATE SET"
+                        " weight = weight + 1.0",
                         (repo, path, error_class),
                     )
                 else:
@@ -397,7 +413,8 @@ def blame_scores(repo: str, error_class: str) -> dict:
     """Learned prior {path: weight in [0,1]} for this error class."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT path, weight FROM blame WHERE repo = ? AND error_class = ? AND weight > 0",
+            "SELECT path, weight FROM blame"
+            " WHERE repo = ? AND error_class = ? AND weight > 0",
             (repo, error_class),
         ).fetchall()
     if not rows:
@@ -406,7 +423,7 @@ def blame_scores(repo: str, error_class: str) -> dict:
     return {path: weight / top for path, weight in rows}
 
 
-# ── Fast paths (Phase 2 router) ──────────────────────────────────────────────
+# --- Fast paths, consumed by the router ---
 
 _FAST_PATH_MIN_MERGED = 2
 _FAST_PATH_MAX_MISSES = 2
@@ -414,8 +431,12 @@ _FAST_PATH_MAX_MISSES = 2
 
 @_never_fatal(None)
 def fast_path_lookup(repo: str, test_logs: str):
-    """If this exact failure shape has merged >= 2 times (and < 2 misses),
-    return {'signature', 'target_files'} so the router can skip triage/localize."""
+    """Return the proven fix targets for this failure shape, if there are any.
+
+    A shape qualifies once it has produced at least _FAST_PATH_MIN_MERGED
+    merged fixes with fewer than _FAST_PATH_MAX_MISSES misses. The router uses
+    the returned {'signature', 'target_files'} to skip triage and localization.
+    """
     signature = failure_signature(test_logs)
     with _connect() as conn:
         row = conn.execute(
@@ -442,12 +463,14 @@ def fast_path_miss(repo: str, signature: str):
         )
 
 
-# ── Agent step log (Phase 2 consumes this) ───────────────────────────────────
+# --- Agent step log ---
 
 @_never_fatal(None)
 def log_agent_step(incident_id, step: str, detail: str = ""):
+    """Append one node's step record to the incident's audit trail."""
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO agent_steps (incident_id, step, detail, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO agent_steps (incident_id, step, detail, created_at)"
+            " VALUES (?, ?, ?, ?)",
             (incident_id, step, detail, time.time()),
         )

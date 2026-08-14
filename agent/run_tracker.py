@@ -1,9 +1,10 @@
 """Run tracking: the event log the dashboard reads.
 
-Both entry points (the graph, the SWE-bench harness) write here; the dashboard
-never imports pipeline code, it just reads these tables. Same contract as
-memory.py: tracking is advisory and must never kill a fix, so every public
-function is wrapped in _never_fatal and degrades to a neutral value.
+Both entry points (the graph and the SWE-bench harness) write here. The
+dashboard never imports pipeline code, it only reads these tables. Same
+contract as memory.py: tracking is advisory and must never kill a fix, so
+every public function is wrapped in _never_fatal and degrades to a neutral
+value.
 
 Tables live in the same SQLite file as memory.py (~/.sre-agent/memory.db):
 
@@ -77,19 +78,24 @@ _seq_lock = threading.Lock()
 
 
 def _db_path() -> str:
-    return os.environ.get(
+    # Must resolve to the same file as memory._db_path, expanduser included,
+    # or the console reads one path while the pipeline writes another.
+    return os.path.expanduser(os.environ.get(
         "MEMORY_DB",
-        os.path.join(os.path.expanduser("~"), ".sre-agent", "memory.db"),
-    )
+        os.path.join("~", ".sre-agent", "memory.db"),
+    ))
 
 
 @contextlib.contextmanager
 def _connect():
-    """Commit-and-close connection. The SSE endpoint polls every second, so
-    leaving connections to the garbage collector (as memory.py does) would leak
-    file handles for the lifetime of a stream."""
+    """Yield a connection, then commit and close it.
+
+    The SSE endpoint polls every second, so leaving connections to the garbage
+    collector (as memory.py does) would leak file handles for the lifetime of
+    a stream.
+    """
     path = _db_path()
-    # Owner-only: events carry repo diffs, CI logs and full LLM prompts
+    # Owner-only: events carry repo diffs, CI logs and full LLM prompts.
     os.makedirs(os.path.dirname(path) or ".", mode=0o700, exist_ok=True)
     if not os.path.exists(path):
         os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
@@ -103,19 +109,22 @@ def _connect():
 
 
 def _never_fatal(default):
+    """Log any failure and return a neutral value. Tracking is advisory."""
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                logger.warning("run_tracker: %s failed (%s) - continuing", fn.__name__, e)
+                logger.warning("run_tracker: %s failed (%s), continuing",
+                               fn.__name__, e)
                 return default() if callable(default) else default
         return wrapper
     return deco
 
 
 def _dumps(detail) -> str:
+    """Render a detail payload as text, never raising on odd input."""
     if detail is None:
         return ""
     if isinstance(detail, str):
@@ -126,7 +135,7 @@ def _dumps(detail) -> str:
         return str(detail)
 
 
-# ── Run lifecycle ────────────────────────────────────────────────────────────
+# --- Run lifecycle ---
 
 @_never_fatal(None)
 def start_run(repo: str, branch: str = "", commit_sha: str = "",
@@ -180,7 +189,7 @@ def update_run(run_id=None, **fields):
 
 @_never_fatal(None)
 def finish_run(status: str, outcome: str = "", run_id=None, **fields):
-    """Close a run. status: passed | failed | error."""
+    """Close a run. status is one of passed, failed, error."""
     run_id = run_id or current_run()
     if not run_id:
         return
@@ -203,9 +212,9 @@ def close_if_running(status: str = "error", outcome: str = "crashed", run_id=Non
         finish_run(status, outcome, run_id=run_id)
 
 
-# ── Events ───────────────────────────────────────────────────────────────────
+# --- Events ---
 
-def _next_seq(conn, run_id: int) -> int:
+def _next_seq(conn, run_id: str) -> int:
     row = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events WHERE run_id = ?",
                        (run_id,)).fetchone()
     return (row[0] or 0) + 1
@@ -237,7 +246,7 @@ def artifact(kind: str, name: str, body, node: str = "", event_seq=None, run_id=
         return None
     text = body if isinstance(body, str) else _dumps(body)
     if len(text) > _BODY_CAP:
-        text = text[:_BODY_CAP] + f"\n… [truncated at {_BODY_CAP} chars]"
+        text = text[:_BODY_CAP] + f"\n... [truncated at {_BODY_CAP} chars]"
     with _connect() as conn:
         cur = conn.execute(
             "INSERT INTO artifacts (run_id, event_seq, node, kind, name, body, created_at)"
@@ -288,12 +297,13 @@ def llm_call(model: str, prompt: str, response: str, latency_ms: int, node: str 
     )
 
 
-# ── Decorator used by the graph nodes ────────────────────────────────────────
+# --- Decorator used by the graph nodes ---
 
 def tracked(node: str, summary=None):
-    """Wrap a graph node: emit start/end events with duration and a summary.
+    """Wrap a graph node so it emits start and end events with a duration.
 
-    summary(state, update) -> dict, called only when the node returns cleanly.
+    summary(state, update) -> dict is called only when the node returns
+    cleanly, and its output becomes the end event's detail.
     """
     def deco(fn):
         @functools.wraps(fn)
@@ -313,7 +323,7 @@ def tracked(node: str, summary=None):
             if summary is not None:
                 try:
                     detail = summary(state, update) or {}
-                except Exception as e:  # a bad summary must not break the node
+                except Exception as e:  # A bad summary must not break the node.
                     detail = {"summary_error": str(e)}
             step(node, phase="end", status="ok", detail=detail,
                  duration_ms=(time.time() - started) * 1000)
@@ -323,7 +333,7 @@ def tracked(node: str, summary=None):
     return deco
 
 
-# ── Read side (used by dashboard.py and tests) ───────────────────────────────
+# --- Read side, used by dashboard.py and the tests ---
 
 def _rows(conn, sql, params=()):
     conn.row_factory = sqlite3.Row
@@ -332,6 +342,7 @@ def _rows(conn, sql, params=()):
 
 @_never_fatal(list)
 def list_runs(limit: int = 50, source: str = "", repo: str = "") -> list:
+    """Most recent runs first, optionally narrowed to one source or repo."""
     where, params = [], []
     if source:
         where.append("source = ?")
@@ -354,6 +365,7 @@ def get_run(run_id: str):
 
 @_never_fatal(list)
 def get_events(run_id: str, after_seq: int = 0) -> list:
+    """Events for one run in sequence order, with detail decoded from JSON."""
     with _connect() as conn:
         rows = _rows(conn, "SELECT * FROM events WHERE run_id = ? AND seq > ?"
                            " ORDER BY seq", (run_id, int(after_seq)))
@@ -368,7 +380,7 @@ def get_events(run_id: str, after_seq: int = 0) -> list:
 
 @_never_fatal(list)
 def get_artifact_index(run_id: str, after_id: int = 0) -> list:
-    """Artifact metadata without bodies - the UI fetches bodies on demand."""
+    """Artifact metadata without bodies. The UI fetches bodies on demand."""
     with _connect() as conn:
         return _rows(
             conn,

@@ -1,24 +1,26 @@
 """Nodes of the LangGraph multi-agent pipeline.
 
-Each node is a plain function: AgentState in, partial state update out.
-LLM access goes through _chat() so tests can stub one seam.
+Each node is a plain function: AgentState in, partial state update out. All
+LLM access goes through _chat(), so tests only have one seam to stub.
 """
 
 import json
 import logging
 import os
-import shutil
+import re
 import time
 
 from pydantic import BaseModel
 
+import config
 import memory
 import run_tracker
 from run_tracker import tracked
 from graph_tools import TOOL_DESCRIPTIONS, make_tools, _visible
 from llm_client import _JSON_CONTRACT, _incidents_section
 from repo_map import get_repo_map
-from repo_ops import apply_fixes, clone_branch, commit_and_push, get_diff, run_tests
+from repo_ops import (apply_fixes, commit_and_push, get_diff, reset_to_head,
+                      run_tests)
 from retrieval import parse_failure_log
 from github_ops import create_pull_request
 
@@ -43,10 +45,48 @@ class FixResult(BaseModel):
     fixes: list[FileFix]
 
 
+class ProviderUnavailable(RuntimeError):
+    """The model provider refused for a reason no retry can fix.
+
+    Nodes otherwise treat a failed completion as an unusable answer and carry
+    on, which is right for garbled output and wrong for a dead API key. A 402
+    or a retired model slug fails identically on every call, so the run burns
+    its whole attempt budget in under a second and buries the real cause under
+    parse warnings. Raising this aborts the run with the actual reason.
+    """
+
+
+# Status codes that mean "stop", with what the operator has to do about each.
+_NON_RETRYABLE = {
+    401: "OPENROUTER_API_KEY is missing, malformed, or revoked.",
+    402: ("OpenRouter credits are exhausted. Top up, or set LLM_MODEL to a "
+          "':free' model."),
+    403: "This account is not permitted to use that model.",
+    404: ("That model id does not exist or stopped being served. OpenRouter "
+          "retires ':free' slugs without notice; pick another from "
+          "https://openrouter.ai/api/v1/models."),
+}
+
+
+def _status_code(exc: Exception) -> int | None:
+    """HTTP status behind a provider error, or None if it is not one.
+
+    The attribute is preferred, but langchain re-wraps SDK exceptions often
+    enough that the string form ("Error code: 402 - {...}") is sometimes the
+    only thing left.
+    """
+    code = getattr(exc, "status_code", None)
+    if isinstance(code, int):
+        return code
+    match = re.search(r"Error code: (\d{3})", str(exc))
+    return int(match.group(1)) if match else None
+
+
 def _chat(prompt: str, model: str = None) -> str:
-    """One LLM completion via OpenRouter. The single seam tests replace."""
+    """Run one completion through OpenRouter. The single seam tests replace."""
     from langchain_openai import ChatOpenAI
-    resolved = model or os.getenv("LLM_MODEL", "tencent/hy3-preview")
+
+    resolved = model or config.llm_model()
     llm = ChatOpenAI(
         model=resolved,
         base_url="https://openrouter.ai/api/v1",
@@ -55,16 +95,22 @@ def _chat(prompt: str, model: str = None) -> str:
         timeout=90,
     )
     started = time.time()
-    content = llm.invoke(prompt).content
+    try:
+        content = llm.invoke(prompt).content
+    except Exception as e:
+        status = _status_code(e)
+        if status in _NON_RETRYABLE:
+            raise ProviderUnavailable(
+                f"{resolved} returned HTTP {status}. {_NON_RETRYABLE[status]}"
+            ) from e
+        # Anything else (a timeout, a 429, a 5xx) may well work next time.
+        raise
     run_tracker.llm_call(resolved, prompt, content, (time.time() - started) * 1000)
     return content
 
 
-def _triage_model() -> str:
-    return os.getenv("TRIAGE_MODEL") or os.getenv("LLM_MODEL", "tencent/hy3-preview")
-
-
 def _parse_json(raw: str) -> dict:
+    """Parse a model reply, tolerating a ```json fence around the object."""
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
@@ -74,10 +120,12 @@ def _parse_json(raw: str) -> dict:
 
 
 def _step(state, step: str, detail: str = ""):
+    """Append one line to this incident's step log in memory."""
     memory.log_agent_step(state.get("incident_id"), step, detail)
 
 
-# ── Dashboard summaries ──────────────────────────────────────────────────────
+# --- Dashboard summaries ---
+#
 # One per node: the compact "what just happened" the run timeline renders.
 
 def _sum_ingest(state, update):
@@ -131,11 +179,11 @@ def _sum_reflect(state, update):
             "llm_calls": state.get("llm_calls", 0)}
 
 
-# ── Nodes ────────────────────────────────────────────────────────────────────
+# --- Nodes ---
 
 @tracked("ingest", _sum_ingest)
 def ingest(state):
-    """Phase 1 memory warm-up: PR fates, blame, few-shots, repo map sync."""
+    """Warm up memory: PR fates, blame, few-shots, repo map sync."""
     repo, logs = state["repo"], state["test_logs"]
     memory.update_pr_fates(repo, os.getenv("GITHUB_TOKEN"))
     error_class = memory.classify_error(logs)
@@ -156,16 +204,18 @@ def ingest(state):
 @tracked("router", _sum_router)
 def router(state):
     """Deterministic: fire the fast path only for a proven failure shape."""
-    fp = memory.fast_path_lookup(state["repo"], state["test_logs"])
-    if fp:
-        targets = [p for p in fp["target_files"] if _visible(p, state["repo_map"])]
+    fast_path = memory.fast_path_lookup(state["repo"], state["test_logs"])
+    if fast_path:
+        targets = [p for p in fast_path["target_files"]
+                   if _visible(p, state["repo_map"])]
         if targets:
-            logger.info("Router: fast path fired for %s -> %s", fp["signature"], targets)
-            _step(state, "router", f"fast-path {fp['signature']}")
-            context = _load_files(state["workdir"], targets)
-            return {"fast_path": fp, "fast_path_used": True,
-                    "candidate_files": targets, "context": context,
-                    "triage_summary": "(skipped - fast path from repo memory)"}
+            logger.info("Router: fast path fired for %s -> %s",
+                        fast_path["signature"], targets)
+            _step(state, "router", f"fast-path {fast_path['signature']}")
+            return {"fast_path": fast_path, "fast_path_used": True,
+                    "candidate_files": targets,
+                    "context": _load_files(state["workdir"], targets),
+                    "triage_summary": "(skipped, fast path from repo memory)"}
     _step(state, "router", "no fast path")
     return {"fast_path": None, "fast_path_used": False}
 
@@ -186,10 +236,12 @@ def triage(state):
     )
     summary = ""
     try:
-        parsed = _parse_json(_chat(prompt, model=_triage_model()))
+        parsed = _parse_json(_chat(prompt, model=config.triage_model()))
         summary = parsed.get("summary", "")
+    except ProviderUnavailable:
+        raise
     except Exception as e:
-        logger.warning("Triage parse failed (%s) - continuing without summary", e)
+        logger.warning("Triage parse failed (%s), continuing without a summary", e)
     _step(state, "triage", summary)
     return {"triage_summary": summary, "llm_calls": state.get("llm_calls", 0) + 1}
 
@@ -220,6 +272,7 @@ def _fallback_candidates(state) -> list:
 
 
 def _load_files(workdir: str, paths: list) -> dict:
+    """Read the given repo-relative paths into {path: content}, skipping misses."""
     context = {}
     for path in paths:
         try:
@@ -257,8 +310,10 @@ def localizer(state):
     while tool_calls < _TOOL_CALL_CAP and llm_calls < MAX_LLM_CALLS:
         try:
             raw = _chat("\n\n".join(transcript))
+        except ProviderUnavailable:
+            raise
         except Exception as e:
-            logger.warning("Localizer LLM call failed (%s)", e)
+            logger.warning("Localizer LLM call failed: %s", e)
             break
         llm_calls += 1
         try:
@@ -281,7 +336,8 @@ def localizer(state):
     if candidates:
         candidates = [p for p in candidates if _visible(p, state["repo_map"])]
     if not candidates:
-        logger.info("Localizer gave no usable files - falling back to traceback+blame seeds")
+        logger.info("Localizer gave no usable files, falling back to "
+                    "traceback and blame seeds")
         candidates = _fallback_candidates(state)
     candidates = candidates[:_CANDIDATE_CAP]
 
@@ -307,27 +363,30 @@ def fixer(state):
         f"{_incidents_section(state.get('incidents'))}"
         f"\nTriage: {state.get('triage_summary', '(none)')}\n"
         f"\n## Source files\n{files_section}\n"
-        + (f"\nA previous attempt FAILED validation with:\n```\n{feedback[-2000:]}\n```\n"
-           if feedback else "")
-        + (f"\nThis exact change was already tried and FAILED - do NOT propose it again, "
-           f"find a materially different fix:\n```diff\n{state['last_fix_diff'][-2000:]}\n```\n"
+        + (f"\nA previous attempt FAILED validation with:\n"
+           f"```\n{feedback[-2000:]}\n```\n" if feedback else "")
+        + (f"\nThis exact change was already tried and FAILED. Do NOT propose it "
+           f"again; find a materially different fix:\n"
+           f"```diff\n{state['last_fix_diff'][-2000:]}\n```\n"
            if state.get("last_fix_diff") else "")
         + (f"\nReviewer feedback on your last proposal:\n{critique}\n" if critique else "")
         + f"\n{_JSON_CONTRACT}"
     )
     try:
         result = FixResult(**_parse_json(_chat(prompt)))
+    except ProviderUnavailable:
+        raise
     except Exception as e:
-        logger.error("Fixer output invalid (%s)", e)
+        logger.error("Fixer output invalid: %s", e)
         _step(state, "fixer", f"invalid output: {e}")
         return {"fixes": [], "llm_calls": state.get("llm_calls", 0) + 1}
 
-    # Guardrail: the agent may never touch tests, its own code, or CI config
+    # Guardrail: the agent may never touch tests, its own code, or CI config.
     fixes = []
     for fix in result.fixes:
         clean = fix.filename.replace("\\", "/").lstrip("./")
         if clean.startswith(("tests", "agent", ".git", ".github")) or "/test" in clean:
-            logger.warning("Fixer tried to modify %s - dropped", clean)
+            logger.warning("Fixer tried to modify %s, dropped", clean)
             continue
         entry = {"filename": clean}
         if fix.search:
@@ -347,32 +406,37 @@ def fixer(state):
 
 @tracked("critic", _sum_critic)
 def critic(state):
-    """Cheap LLM sanity-checks the proposed fix before we pay for Docker."""
+    """Cheap LLM sanity-checks the proposed fix before a Docker run is spent."""
     if not state.get("fixes"):
         return {"critic_feedback": "", "llm_calls": state.get("llm_calls", 0)}
-    def _fix_preview(f):
-        if "search" in f:
-            return (f"\n### {f['filename']} (search/replace)\n"
-                    f"FIND:\n```\n{f['search']}\n```\n"
-                    f"REPLACE WITH:\n```\n{f['replace']}\n```\n")
-        return f"\n### {f['filename']} (new content)\n```\n{f.get('content', '')[:4000]}\n```\n"
+
+    def _fix_preview(fix):
+        if "search" in fix:
+            return (f"\n### {fix['filename']} (search/replace)\n"
+                    f"FIND:\n```\n{fix['search']}\n```\n"
+                    f"REPLACE WITH:\n```\n{fix['replace']}\n```\n")
+        return (f"\n### {fix['filename']} (new content)\n"
+                f"```\n{fix.get('content', '')[:4000]}\n```\n")
 
     changes = "".join(_fix_preview(f) for f in state["fixes"])
     prompt = (
         "You review a proposed CI auto-fix. Judge only: does the change plausibly "
         "address the diagnosed failure without unrelated edits?\n"
-        'Respond JSON only: {"verdict": "approve" | "revise", "feedback": "one short paragraph"}\n\n'
+        'Respond JSON only: {"verdict": "approve" | "revise",'
+        ' "feedback": "one short paragraph"}\n\n'
         f"Diagnosis: {state.get('diagnosis', '')}\n"
         f"## Failing test output\n```\n{state['test_logs'][-3000:]}\n```\n"
         f"## Proposed changes\n{changes}"
     )
     verdict, feedback = "approve", ""
     try:
-        parsed = _parse_json(_chat(prompt, model=_triage_model()))
+        parsed = _parse_json(_chat(prompt, model=config.triage_model()))
         verdict = parsed.get("verdict", "approve")
         feedback = parsed.get("feedback", "")
+    except ProviderUnavailable:
+        raise
     except Exception as e:
-        logger.warning("Critic parse failed (%s) - approving", e)
+        logger.warning("Critic parse failed (%s), approving by default", e)
     _step(state, "critic", f"{verdict}: {feedback}")
     update = {"llm_calls": state.get("llm_calls", 0) + 1}
     if verdict == "revise":
@@ -426,22 +490,26 @@ def validator(state):
         update["last_fix_diff"] = fix_diff
         if state.get("fast_path_used"):
             memory.fast_path_miss(state["repo"], state["fast_path"]["signature"])
-            logger.info("Fast path missed - demoted, rerouting through triage")
+            logger.info("Fast path missed, demoted and rerouting through triage")
             update.update(fast_path_used=False, fast_path=None, demoted_fast_path=True)
-        # pristine tree for the next attempt
+        # Hand the next attempt a pristine tree.
         try:
-            for entry in os.listdir(workdir):
-                p = os.path.join(workdir, entry)
-                shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else os.remove(p)
-            clone_branch(state["repo"], state["branch"], workdir)
+            reset_to_head(workdir)
         except Exception as e:
-            logger.error("Workdir reset failed (%s)", e)
+            # A tree still carrying the last failed patch makes the next
+            # attempt meaningless, so stop rather than spend the budget.
+            logger.error("Workdir reset failed (%s), standing down", e)
+            return {**update, "reset_failed": True}
     return update
 
 
 def route_after_validator(state) -> str:
     if state.get("passed"):
         return "publisher"
+    if state.get("reset_failed"):
+        # The tree still holds the last failed patch, so another attempt would
+        # be patching unknown content. Nothing to learn from continuing.
+        return "reflect"
     if state.get("llm_calls", 0) >= MAX_LLM_CALLS or state.get("attempt", 0) >= MAX_ATTEMPTS:
         return "reflect"
     if state.get("demoted_fast_path"):
@@ -451,18 +519,21 @@ def route_after_validator(state) -> str:
 
 @tracked("publisher", _sum_publisher)
 def publisher(state):
-    """Push the autofix branch and open the PR."""
-    token = os.getenv("GITHUB_TOKEN")
+    """Push the autofix branch and open the pull request."""
+    # Stripped because a PAT pasted into a .env or a CI secret often carries a
+    # trailing newline, which git rejects as a bad credential.
+    token = os.getenv("GITHUB_TOKEN", "").strip()
     if not token:
-        logger.warning("GITHUB_TOKEN not set - skipping push and PR")
+        logger.warning("GITHUB_TOKEN not set, skipping push and PR")
         return {"done": "no_token"}
     safe_branch = state["branch"].replace("/", "-")
     fix_branch = f"autofix/{safe_branch}-{state['commit_sha'][:7]}"
     try:
-        # commit_and_push may suffix the name if the remote already has it
+        # commit_and_push may suffix the name if the remote already has it.
         fix_branch = commit_and_push(state["workdir"], fix_branch, token, state["repo"])
         pr_url = create_pull_request(
-            token=token, repo=state["repo"], head=fix_branch, base="main",
+            token=token, repo=state["repo"], head=fix_branch,
+            base=config.pr_base_branch(),
             title=f"[Auto-fix] {state.get('diagnosis', 'automated fix')}",
             body=(
                 f"**Branch:** `{state['branch']}`\n"
@@ -484,7 +555,7 @@ def publisher(state):
 
 @tracked("reflect", _sum_reflect)
 def reflect(state):
-    """Run post-mortem into agent_steps, then give up cleanly."""
+    """Write a post-mortem into agent_steps, then give up cleanly."""
     _step(state, "reflect", json.dumps({
         "attempts": state.get("attempt", 0),
         "llm_calls": state.get("llm_calls", 0),
