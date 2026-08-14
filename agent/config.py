@@ -30,6 +30,11 @@ DEFAULT_PR_BASE_BRANCH = "main"
 #     curl -s https://openrouter.ai/api/v1/models | grep -o '"id":"[^"]*:free"'
 DEFAULT_LLM_MODEL = "poolside/laguna-s-2.1:free"
 
+# Used when LLM_MODEL cannot be called at all - no credit, retired slug, a
+# model this account may not use. Keeping a free slug here means a lapsed
+# balance degrades the run to a slower model instead of ending it.
+DEFAULT_FALLBACK_LLM_MODEL = "poolside/laguna-s-2.1:free"
+
 
 def _env(name: str, default: str) -> str:
     """Read a setting, treating whitespace-only as unset.
@@ -85,6 +90,26 @@ def triage_model() -> str:
     something the operator never chose.
     """
     return _env("TRIAGE_MODEL", llm_model())
+
+
+# Explicit words that turn the fallback off. A blank value cannot mean
+# "disabled" here: _env deliberately reads blank as "use the default", so that
+# a stray empty assignment in a .env cannot silently wipe a setting. Turning
+# off a safety net should take a deliberate word, not an absent character.
+_FALLBACK_OFF = {"none", "off", "disabled", "false", "0"}
+
+
+def fallback_llm_model() -> str:
+    """Model to degrade to when the configured one cannot be called at all.
+
+    Returns "" when disabled via FALLBACK_LLM_MODEL=none, which is the right
+    choice where a run on a weaker model is worse than no run: the default
+    fallback is a free slug, so it is slower and less consistent at emitting
+    valid JSON. A fix it produces still has to pass the full suite before
+    anything is published, so the floor on correctness does not move.
+    """
+    value = _env("FALLBACK_LLM_MODEL", DEFAULT_FALLBACK_LLM_MODEL)
+    return "" if value.lower() in _FALLBACK_OFF else value
 
 
 def pr_base_branch() -> str:

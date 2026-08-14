@@ -166,24 +166,51 @@ def check_openrouter(offline):
 
 
 def check_model(offline):
+    """The configured model, and the fallback if the configured one is dead.
+
+    A run is only actually blocked when both are unusable, so this reports the
+    pair rather than the first failure - otherwise doctor would refuse a setup
+    that works perfectly well in degraded mode.
+    """
     import config
     model = config.llm_model()
+    fallback = config.fallback_llm_model()
     if offline:
         return Result("Model", SKIP, f"{model} (--offline)")
     key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not key:
         return Result("Model", SKIP, f"{model} (no key to check with)")
 
-    # A real completion, because "the id is in the catalogue" is not the same
-    # as "this account can call it": free slugs get retired, and paid ones 402
-    # with no credit.
-    #
-    # max_tokens is deliberately omitted so the provider reserves the model's
-    # full output budget, exactly as a real run does. OpenRouter checks
-    # affordability against the reservation rather than actual usage, so
-    # capping it here would let a credit-starved account pass this check and
-    # then 402 on the first genuine call. The prompt is one word, so the
-    # tokens actually billed stay negligible.
+    primary = _probe_model(model, key)
+    if primary.status == OK or not fallback or fallback == model:
+        return primary
+
+    # Configured model unusable: the run is only dead if the fallback is too.
+    secondary = _probe_model(fallback, key)
+    if secondary.status == OK:
+        return Result("Model", WARN,
+                      f"{primary.detail}; will degrade to {fallback}",
+                      "Runs will work but on the slower free model. "
+                      f"{primary.hint}")
+    return Result("Model", FAIL,
+                  f"{primary.detail}; fallback {secondary.detail}",
+                  "Neither model can be called. " + primary.hint)
+
+
+def _probe_model(model, key):
+    """Can this account call this model id right now?
+
+    A real completion, because "the id is in the catalogue" is not the same as
+    "this account can call it": free slugs get retired, and paid ones 402 with
+    no credit.
+
+    max_tokens is deliberately omitted so the provider reserves the model's
+    full output budget, exactly as a real run does. OpenRouter checks
+    affordability against the reservation rather than actual usage, so capping
+    it here would let a credit-starved account pass and then 402 on the first
+    genuine call. The prompt is one word, so tokens actually billed stay
+    negligible.
+    """
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],

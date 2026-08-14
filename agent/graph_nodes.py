@@ -58,6 +58,9 @@ class ProviderUnavailable(RuntimeError):
 
 # Status codes that mean "stop", with what the operator has to do about each.
 _NON_RETRYABLE = {
+    400: ("OpenRouter rejected the request. An unknown model id answers 400 "
+          "rather than 404, so check LLM_MODEL first; an oversized context "
+          "looks the same."),
     401: "OPENROUTER_API_KEY is missing, malformed, or revoked.",
     402: ("OpenRouter credits are exhausted. Top up, or set LLM_MODEL to a "
           "':free' model."),
@@ -82,31 +85,111 @@ def _status_code(exc: Exception) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _chat(prompt: str, model: str = None) -> str:
-    """Run one completion through OpenRouter. The single seam tests replace."""
+# A 401 is the one non-retryable status the fallback cannot help with: the
+# same key is used for both models, so a rejected key is rejected twice. The
+# rest are about the model, not the credential.
+_FALLBACK_WORTH_TRYING = {400, 402, 403, 404}
+
+# Which model a run has degraded to, keyed by run id, so the remaining nodes
+# stop paying a round trip to re-learn what the first failure established.
+#
+# Deliberately NOT a ContextVar. LangGraph invokes each node in a copied
+# context, so a set() inside a node is discarded when that node returns and
+# every subsequent node would retry the dead model - which is exactly the
+# waste this is meant to avoid, and it does not show up in a test that calls
+# _chat directly in one context.
+#
+# Keying by run id keeps it per-run without leaking between runs: a topped-up
+# balance is picked up by the next run with no restart.
+_degraded_by_run: dict[str, str] = {}
+
+# Backstop against a run that never closes (a crash between start and finish).
+_DEGRADED_CAP = 128
+
+
+def _degraded_model() -> str:
+    return _degraded_by_run.get(run_tracker.current_run() or "", "")
+
+
+def _mark_degraded(model: str):
+    run_id = run_tracker.current_run()
+    if not run_id:
+        # No run context (the harness, a direct call). The fallback still
+        # works, it just is not remembered between calls.
+        return
+    if len(_degraded_by_run) >= _DEGRADED_CAP:
+        _degraded_by_run.pop(next(iter(_degraded_by_run)), None)
+    _degraded_by_run[run_id] = model
+
+
+def forget_degraded(run_id: str):
+    """Drop a finished run's degraded state. Called when the run closes."""
+    _degraded_by_run.pop(run_id or "", None)
+
+
+def _complete(prompt: str, model: str) -> str:
+    """One completion against one model. Raises on any provider failure."""
     from langchain_openai import ChatOpenAI
 
-    resolved = model or config.llm_model()
     llm = ChatOpenAI(
-        model=resolved,
+        model=model,
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
         temperature=0.1,
         timeout=90,
     )
     started = time.time()
+    content = llm.invoke(prompt).content
+    run_tracker.llm_call(model, prompt, content, (time.time() - started) * 1000)
+    return content
+
+
+def _chat(prompt: str, model: str = None) -> str:
+    """Run one completion, degrading to the fallback model if it has to.
+
+    The preferred model is tried first on every run. Exhausted credit is the
+    common case and it is temporary - topping up should start working again
+    without anyone editing config or restarting the server.
+    """
+    preferred = model or config.llm_model()
+    fallback = (config.fallback_llm_model() or "").strip()
+
+    # Already degraded earlier in this run: go straight there.
+    degraded = _degraded_model()
+    if degraded and degraded != preferred:
+        return _complete(prompt, degraded)
+
     try:
-        content = llm.invoke(prompt).content
+        return _complete(prompt, preferred)
     except Exception as e:
         status = _status_code(e)
-        if status in _NON_RETRYABLE:
+        if status not in _NON_RETRYABLE:
+            # A timeout, a 429, a 5xx: may well work next time, and switching
+            # models would hide a problem that is not about the model.
+            raise
+        if status not in _FALLBACK_WORTH_TRYING or not fallback or fallback == preferred:
             raise ProviderUnavailable(
-                f"{resolved} returned HTTP {status}. {_NON_RETRYABLE[status]}"
+                f"{preferred} returned HTTP {status}. {_NON_RETRYABLE[status]}"
             ) from e
-        # Anything else (a timeout, a 429, a 5xx) may well work next time.
-        raise
-    run_tracker.llm_call(resolved, prompt, content, (time.time() - started) * 1000)
-    return content
+
+        logger.warning("%s returned HTTP %s - falling back to %s for this run",
+                       preferred, status, fallback)
+        run_tracker.step("llm", status="skipped", detail={
+            "degraded_from": preferred, "to": fallback, "http_status": status,
+        })
+        try:
+            content = _complete(prompt, fallback)
+        except Exception as fe:
+            fstatus = _status_code(fe)
+            if fstatus in _NON_RETRYABLE:
+                raise ProviderUnavailable(
+                    f"{preferred} returned HTTP {status} and the fallback "
+                    f"{fallback} returned HTTP {fstatus}. "
+                    f"{_NON_RETRYABLE[fstatus]}"
+                ) from fe
+            raise
+        _mark_degraded(fallback)
+        return content
 
 
 def _parse_json(raw: str) -> dict:

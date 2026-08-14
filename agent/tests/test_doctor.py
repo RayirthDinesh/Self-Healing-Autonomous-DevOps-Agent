@@ -134,6 +134,48 @@ def test_model_probe_reserves_the_full_budget(monkeypatch):
     assert "max_tokens" not in captured["body"]
 
 
+def test_dead_primary_with_live_fallback_only_warns(monkeypatch):
+    """Degraded is not broken - doctor must not refuse a setup that works."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("LLM_MODEL", "vendor/paid")
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", "vendor/free:free")
+    monkeypatch.setattr(doctor, "_probe_model", lambda model, key: (
+        doctor.Result("Model", FAIL, f"{model} -> HTTP 402", "no credit")
+        if model == "vendor/paid"
+        else doctor.Result("Model", OK, f"{model} answered")))
+
+    result = doctor.check_model(offline=False)
+    assert result.status == WARN
+    assert "vendor/free:free" in result.detail
+
+
+def test_both_models_dead_fails(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("LLM_MODEL", "vendor/paid")
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", "vendor/free:free")
+    monkeypatch.setattr(doctor, "_probe_model", lambda model, key:
+                        doctor.Result("Model", FAIL, f"{model} -> HTTP 402", "no credit"))
+
+    result = doctor.check_model(offline=False)
+    assert result.status == FAIL
+    assert "vendor/paid" in result.detail and "vendor/free:free" in result.detail
+
+
+def test_disabled_fallback_means_the_primary_decides(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "key")
+    monkeypatch.setenv("LLM_MODEL", "vendor/paid")
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", "none")
+    probed = []
+
+    def fake_probe(model, key):
+        probed.append(model)
+        return doctor.Result("Model", FAIL, f"{model} -> HTTP 402", "no credit")
+
+    monkeypatch.setattr(doctor, "_probe_model", fake_probe)
+    assert doctor.check_model(offline=False).status == FAIL
+    assert probed == ["vendor/paid"]
+
+
 def test_offline_skips_network(monkeypatch):
     # The key still has to be present: "unset" is a real problem whether or
     # not we are allowed to phone out, so that check runs before --offline.

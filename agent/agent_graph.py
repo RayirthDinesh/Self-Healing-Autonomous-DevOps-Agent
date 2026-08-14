@@ -69,8 +69,18 @@ def run_graph(repo: str, branch: str, commit_sha: str, test_logs: str,
               source: str = "webhook"):
     """Run one CI failure through the graph. Called by pipeline.run."""
     logger.info("=== Graph pipeline started | branch=%s commit=%s ===", branch, commit_sha)
-    run_tracker.start_run(repo, branch, commit_sha, source=source, mode="graph")
+    run_id = run_tracker.start_run(repo, branch, commit_sha, source=source, mode="graph")
     run_tracker.artifact("ci_logs", "failing CI output", test_logs)
+    try:
+        return _run_graph_body(repo, branch, commit_sha, test_logs)
+    finally:
+        # Whether this run degraded to the fallback model is state about this
+        # run only. Dropping it means the next run tries the preferred model
+        # again, so topping up a balance resumes normal service by itself.
+        nodes.forget_degraded(run_id)
+
+
+def _run_graph_body(repo: str, branch: str, commit_sha: str, test_logs: str):
     with tempfile.TemporaryDirectory() as workdir:
         try:
             clone_branch(repo, branch, workdir)

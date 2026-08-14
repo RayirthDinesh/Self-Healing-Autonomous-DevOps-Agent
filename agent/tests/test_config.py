@@ -33,6 +33,28 @@ def test_triage_follows_llm_model_when_unset(monkeypatch):
     assert config.triage_model() == "anthropic/claude-opus-5"
 
 
+def test_fallback_defaults_to_a_free_model(monkeypatch):
+    monkeypatch.delenv("FALLBACK_LLM_MODEL", raising=False)
+    assert config.fallback_llm_model().endswith(":free")
+
+
+@pytest.mark.parametrize("off", ["none", "off", "disabled", "false", "0", "NONE"])
+def test_fallback_disabled_by_an_explicit_word(monkeypatch, off):
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", off)
+    assert config.fallback_llm_model() == ""
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_does_not_disable_the_fallback(monkeypatch, blank):
+    """A stray empty assignment must not quietly remove the safety net.
+
+    _env reads blank as "use the default" everywhere else, and this setting
+    should not be the one exception that fails open.
+    """
+    monkeypatch.setenv("FALLBACK_LLM_MODEL", blank)
+    assert config.fallback_llm_model() == config.DEFAULT_FALLBACK_LLM_MODEL
+
+
 def test_triage_model_overrides_independently(monkeypatch):
     monkeypatch.setenv("LLM_MODEL", "anthropic/claude-opus-5")
     monkeypatch.setenv("TRIAGE_MODEL", "anthropic/claude-haiku-4-5-20251001")

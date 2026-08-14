@@ -125,6 +125,7 @@ curl -sS -X POST http://127.0.0.1:8000/webhook \
 | `GITHUB_TOKEN` | to open PRs | Classic PAT with the `repo` scope, or a fine-grained token with Contents and Pull requests write on the target repo. Without it the agent still fixes and validates, then logs "skipping push and PR". |
 | `LLM_MODEL` | no | Default `poolside/laguna-s-2.1:free` - free, so a fresh clone runs with no credit on the account. Any OpenRouter model id works; a paid one is faster and more consistent at valid JSON. |
 | `TRIAGE_MODEL` | no | Cheaper model for the triage and review nodes. Falls back to `LLM_MODEL`. |
+| `FALLBACK_LLM_MODEL` | no | Used when `LLM_MODEL` cannot be called at all (400/402/403/404). Default `poolside/laguna-s-2.1:free`, so exhausted credit slows a run down rather than ending it. `none` disables it; a blank value does not. |
 | `PR_BASE_BRANCH` | no | Branch the auto-fix PR targets. Default `main`. |
 | `VALIDATOR_IMAGE` | no | Image the candidate fix is tested in. Default `python:3.11-slim`. Needs python and pip on PATH. |
 | `VALIDATOR_TIMEOUT` | no | Seconds for one validation run, covering `pip install` plus the suite. Default `300`. A timeout counts as a failed attempt, never a pass. |

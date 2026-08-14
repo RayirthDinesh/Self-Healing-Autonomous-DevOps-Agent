@@ -175,6 +175,11 @@ Over the public internet, put TLS in front or use `ssh -L 8001:localhost:8001`.
 - **Retries only what retrying can fix** — a bad key, exhausted credits, or a
   retired model id stops the run on the first call with the actual reason,
   rather than spending the whole attempt budget failing the same way.
+- **Degrades instead of dying** — if the configured model cannot be called at
+  all, the run continues on a free fallback rather than stopping. The
+  preferred model is tried again at the start of every run, so topping up a
+  balance resumes normal service with no restart. A fallback fix still has to
+  turn the suite green before anything is published.
 
 ## Setup
 
