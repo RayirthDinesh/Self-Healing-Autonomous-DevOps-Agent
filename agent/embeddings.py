@@ -1,4 +1,4 @@
-"""Semantic embeddings for code retrieval - ONNX via fastembed, no GPU needed."""
+"""Semantic embeddings for code retrieval, ONNX via fastembed. No GPU needed."""
 
 import hashlib
 import logging
@@ -14,6 +14,7 @@ _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".sre-agent", "embeddings")
 
 
 def _get_model():
+    """Load the embedding model on first use and keep it for the process."""
     global _model
     if _model is None:
         from fastembed import TextEmbedding
@@ -28,7 +29,7 @@ def _hash(text: str) -> str:
 
 
 def embed(text: str) -> np.ndarray:
-    """Return embedding vector for text, caching to disk by content hash."""
+    """Embedding vector for text, cached on disk by content hash."""
     h = _hash(text)
     os.makedirs(_CACHE_DIR, exist_ok=True)
     path = os.path.join(_CACHE_DIR, f"{h}.npy")
@@ -40,25 +41,27 @@ def embed(text: str) -> np.ndarray:
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity, defined as 0.0 when either vector is degenerate."""
     denom = np.linalg.norm(a) * np.linalg.norm(b)
     return float(np.dot(a, b) / denom) if denom > 0 else 0.0
 
 
 def semantic_scores(query: str, corpus: dict) -> dict:
-    """Return {path: cosine_similarity} between query and each file's content."""
+    """{path: similarity} between the query and each whole file's content."""
     query_vec = embed(query)
     return {path: cosine(query_vec, embed(text)) for path, text in corpus.items()}
 
 
 def chunk_scores(query: str, file_chunks: dict) -> dict:
-    """Return {path: best_chunk_cosine_similarity} using function-level chunks.
+    """{path: best chunk similarity}, scoring function-level chunks.
 
-    file_chunks - {path: [chunk_dict, ...]} from chunker.chunks_for_repo()
+    file_chunks is {path: [chunk, ...]} as produced by
+    chunker.chunks_for_repo.
 
-    For each file we embed every function separately and take the MAX similarity
-    across all its chunks. A file scores high if even one of its functions is
-    semantically close to the error - much more precise than averaging the whole
-    file together.
+    Every function is embedded separately and a file takes the maximum
+    similarity across its chunks, so it scores high when even one of its
+    functions is close to the error. Averaging the whole file together buries
+    that signal.
     """
     query_vec = embed(query)
     scores = {}

@@ -1,9 +1,9 @@
-"""Function-level chunking for RAG.
+"""Function-level chunking for retrieval.
 
-Instead of embedding whole files, we split each file into individual
-function/class chunks using the symbol boundaries from repo_map. This gives
-the embedding model a focused unit of meaning per chunk, so cosine similarity
-to the error log is much more precise than file-level averaging.
+Files are split into function and class chunks along the symbol boundaries
+recorded in the repo map, rather than embedded whole. Each chunk is then a
+focused unit of meaning, which makes similarity against an error log far more
+precise than a file-level average.
 """
 
 
@@ -22,14 +22,13 @@ def extract_chunks(path: str, content: str, symbols: list) -> list:
     lines = content.splitlines()
     chunks = []
     for sym in sorted(symbols, key=lambda s: s["line"]):
-        start = sym["line"] - 1                          # 0-indexed
-        end = sym.get("end_line", start + 80)            # end_line is inclusive
-        chunk_lines = lines[start:end]
+        start = sym["line"] - 1                    # symbol lines are 1-indexed
+        end = sym.get("end_line", start + 80)      # inclusive
         chunks.append({
             "file": path,
             "name": sym["name"],
             "kind": sym["kind"],
-            "text": "\n".join(chunk_lines),
+            "text": "\n".join(lines[start:end]),
             "start_line": sym["line"],
             "end_line": end,
         })
@@ -39,8 +38,8 @@ def extract_chunks(path: str, content: str, symbols: list) -> list:
 def chunks_for_repo(source_files: dict, repo_map_files: dict) -> dict:
     """Build {path: [chunk, ...]} for every source file.
 
-    source_files  - {path: content} from retrieval
-    repo_map_files - files sub-dict from get_repo_map(), carries symbols
+    source_files is {path: content} as loaded by retrieval. repo_map_files is
+    the files sub-dict of get_repo_map, which carries the symbol boundaries.
     """
     result = {}
     for path, content in source_files.items():

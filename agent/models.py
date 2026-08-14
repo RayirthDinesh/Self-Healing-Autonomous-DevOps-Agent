@@ -1,8 +1,8 @@
 """Pydantic models for the webhook server.
 
-Defining the request body as a Pydantic model gives us automatic validation:
-if GitHub Actions sends a payload missing a field or with the wrong type,
-FastAPI rejects it with a 422 before our handler ever runs.
+Declaring the request body as a model buys automatic validation: a payload
+from GitHub Actions that is missing a field, or carries the wrong type, is
+rejected with a 422 before the handler runs.
 """
 
 from pydantic import BaseModel

@@ -1,4 +1,4 @@
-"""Repo map - tree-sitter symbol graph over a cloned repo, cached per commit.
+"""Repo map: a tree-sitter symbol graph over a cloned repo.
 
 Built once per (repo, commit) and cached on disk, so the agent has structural
 awareness of any repo it is pointed at without re-parsing on every failure.
@@ -25,9 +25,10 @@ _LANGUAGES = {
     ".tsx": ("typescript", Language(tree_sitter_typescript.language_tsx())),
 }
 
-# Never parse these (same spirit as repo_ops._SKIP_PREFIXES, but tests ARE
-# parsed here: they contribute import edges, they're just flagged).
-_SKIP_DIRS = {".git", ".github", "node_modules", "__pycache__", ".venv", "venv", "agent"}
+# Directories that are never parsed. Test files are parsed, because their
+# import edges matter; they are only flagged via is_test.
+_SKIP_DIRS = {".git", ".github", "node_modules", "__pycache__",
+              ".venv", "venv", "agent"}
 
 _TEST_PATH_RE = re.compile(r"(^|/)(tests?|__tests__)(/|$)|(^|/)test_[^/]+$|_test\.[a-z]+$")
 
@@ -48,8 +49,10 @@ def _node_text(node, src):
 
 
 def _py_docstring(body_node, src):
+    """First string literal in a body, skipping any leading comments."""
     for child in body_node.children:
-        if child.type == "expression_statement" and child.children and child.children[0].type == "string":
+        if (child.type == "expression_statement" and child.children
+                and child.children[0].type == "string"):
             return _node_text(child.children[0], src).strip("\"' \n")
         if child.type not in ("comment",):
             break
@@ -57,6 +60,7 @@ def _py_docstring(body_node, src):
 
 
 def _walk_python(tree, src):
+    """Collect (symbols, imported module names) from a parsed Python file."""
     symbols, imports = [], []
 
     def visit(node, class_depth):
@@ -101,6 +105,7 @@ def _walk_python(tree, src):
 
 
 def _walk_js(tree, src):
+    """Collect (symbols, import specifiers) from a parsed JS or TS file."""
     symbols, imports = [], []
 
     def visit(node):
@@ -149,6 +154,7 @@ def _walk_js(tree, src):
 
 
 def _resolve_python_import(module, files):
+    """Map a dotted module name onto a file in the repo, or None."""
     candidate = module.replace(".", "/")
     for path in (candidate + ".py", candidate + "/__init__.py"):
         if path in files:
@@ -157,18 +163,21 @@ def _resolve_python_import(module, files):
 
 
 def _resolve_js_import(spec, importer, files):
+    """Map a relative import specifier onto a file in the repo, or None."""
     if not spec.startswith("."):
-        return None  # bare specifier = external package
-    base = os.path.normpath(os.path.join(os.path.dirname(importer), spec)).replace("\\", "/")
+        return None  # A bare specifier is an external package.
+    base = os.path.normpath(
+        os.path.join(os.path.dirname(importer), spec)).replace("\\", "/")
     candidates = [base] + [base + ext for ext in (".js", ".jsx", ".ts", ".tsx")]
     candidates += [base + "/index" + ext for ext in (".js", ".ts")]
-    for c in candidates:
-        if c in files:
-            return c
+    for candidate in candidates:
+        if candidate in files:
+            return candidate
     return None
 
 
 def _pagerank(nodes, edges, damping=0.85, iterations=20):
+    """Rank files by import centrality, used to break scoring ties."""
     if not nodes:
         return {}
     incoming = {n: [] for n in nodes}
@@ -188,7 +197,7 @@ def _pagerank(nodes, edges, damping=0.85, iterations=20):
 
 
 def build_map(repo, commit, clone_path):
-    """Parse the clone and return the map dict (does not touch the cache)."""
+    """Parse the clone and return the map. Does not touch the cache."""
     started = time.monotonic()
     files = {}
     raw_imports = {}
@@ -244,7 +253,7 @@ def build_map(repo, commit, clone_path):
 
 
 def get_repo_map(repo, commit, clone_path):
-    """Cached map for (repo, commit); builds and caches on miss or sha change."""
+    """Cached map for (repo, commit), rebuilt on a miss or a new commit."""
     path = _cache_path(repo)
     try:
         with open(path) as f:

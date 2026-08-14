@@ -26,8 +26,8 @@ import logging
 import os
 import time
 
-from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse,
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi.responses import (FileResponse, RedirectResponse,
                                StreamingResponse)
 
 import run_tracker
@@ -78,8 +78,11 @@ def _is_local_request(request: Request) -> bool:
 
 
 def expected_secret() -> str:
-    """DASHBOARD_SECRET is preferred: it grants reading only, while
-    WEBHOOK_SECRET also lets the holder POST a CI failure and start a run."""
+    """The secret this console accepts.
+
+    DASHBOARD_SECRET is preferred because it grants reading only, while
+    WEBHOOK_SECRET also lets the holder POST a CI failure and start a run.
+    """
     return os.getenv("DASHBOARD_SECRET") or os.getenv("WEBHOOK_SECRET") or ""
 
 
@@ -103,10 +106,11 @@ def _require(request: Request):
         raise HTTPException(status_code=401, detail="invalid dashboard secret")
 
 
-# ── Page ─────────────────────────────────────────────────────────────────────
+# --- Page ---
 
 @router.get("/ui")
 def ui(request: Request, key: str = ""):
+    """Serve the console, moving a ?key= secret into a cookie first."""
     _require(request)
     if not os.path.exists(_PAGE):
         raise HTTPException(status_code=500, detail=f"dashboard.html missing at {_PAGE}")
@@ -123,7 +127,7 @@ def ui(request: Request, key: str = ""):
     return FileResponse(_PAGE, media_type="text/html")
 
 
-# ── JSON API ─────────────────────────────────────────────────────────────────
+# --- JSON API ---
 
 @router.get("/api/runs")
 def api_runs(request: Request, limit: int = Query(50, ge=1, le=500),
@@ -181,7 +185,7 @@ async def api_stream(request: Request, run_id: str):
             yield f"data: {json.dumps(payload, default=str)}\n\n"
 
             if run.get("status") and run["status"] != "running":
-                # One extra pass so late writes (final artifacts) still ship
+                # One extra pass, so late writes (final artifacts) still ship.
                 if finished_at is None:
                     finished_at = time.time()
                 elif time.time() - finished_at >= _TERMINAL_GRACE:
@@ -195,10 +199,10 @@ async def api_stream(request: Request, run_id: str):
     })
 
 
-# ── Standalone mode ──────────────────────────────────────────────────────────
+# --- Standalone mode ---
 
 def build_app():
-    from fastapi import FastAPI
+    """Wrap the router in a minimal app for the standalone entry point."""
     app = FastAPI(title="SRE Agent Dashboard")
     app.include_router(router)
 

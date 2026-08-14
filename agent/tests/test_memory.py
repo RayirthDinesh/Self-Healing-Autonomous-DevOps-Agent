@@ -100,14 +100,16 @@ def test_pr_fate_merged_builds_blame(no_embeddings, monkeypatch):
     class FakeResponse:
         def raise_for_status(self):
             pass
+
         def json(self):
             return {"merged": True, "state": "closed"}
+
     monkeypatch.setattr(memory.requests, "get", lambda *a, **k: FakeResponse())
 
     resolved = memory.update_pr_fates("o/r", "tok")
     assert resolved == {48: "merged"}
     assert memory.blame_scores("o/r", "name-error") == {"src/aggregator.py": 1.0}
-    # sweep is lazy: second call finds nothing open
+    # The sweep is lazy, so a second call finds nothing still open.
     assert memory.update_pr_fates("o/r", "tok") == {}
 
 
@@ -118,10 +120,13 @@ def test_pr_fate_closed_decays_blame_and_excludes_incident(no_embeddings, monkey
     class FakeResponse:
         def __init__(self, payload):
             self.payload = payload
+
         def raise_for_status(self):
             pass
+
         def json(self):
             return self.payload
+
     monkeypatch.setattr(memory.requests, "get",
                         lambda *a, **k: FakeResponse(next(fates)))
 
@@ -197,17 +202,20 @@ TRACEBACK_LOG = (
 def test_failure_signature_composition():
     sig = memory.failure_signature(TRACEBACK_LOG)
     assert sig == "name-error|tests/test_app.py|src/core.py"
-    # same shape -> same key; different error text -> same key too (shape-based)
+    # The signature is shape-based, so extra noise in the log does not change it.
     assert memory.failure_signature(TRACEBACK_LOG + "\nnoise") == sig
 
 
 def _merge_incident(monkeypatch, n):
     """Record an incident for TRACEBACK_LOG, open PR n, sweep it as merged."""
+
     class FakeResponse:
         def raise_for_status(self):
             pass
+
         def json(self):
             return {"merged": True, "state": "closed"}
+
     monkeypatch.setattr(memory.requests, "get", lambda *a, **k: FakeResponse())
     incident_id = memory.record_incident(
         "o/r", "b", "s", TRACEBACK_LOG, "typo", ["src/core.py"], "diff",

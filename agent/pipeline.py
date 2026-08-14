@@ -1,8 +1,8 @@
 """Entry point from the webhook server into the agent.
 
-Thin on purpose: the work lives in agent_graph/graph_nodes. This module exists
-so main.py has one stable call to make, and so a crash can never leave the
-console showing a run that is still "running".
+Thin on purpose. The work lives in agent_graph and graph_nodes; this module
+exists so main.py has one stable call to make, and so a crash can never leave
+the console showing a run that is still "running".
 """
 
 import logging

@@ -1,8 +1,8 @@
-"""LLM client - shared prompt utilities and the single-shot call_llm used by
-the SWE-bench harness.
+"""LLM client: shared prompt utilities and the single-shot call_llm.
 
-The LangGraph pipeline (graph_nodes._chat) no longer uses call_llm; the
-harness imports it directly, so it lives here rather than being inlined.
+The LangGraph pipeline builds its own completions in graph_nodes._chat. What
+remains here is the prompt scaffolding both paths share, plus the one-shot
+call_llm that the SWE-bench harness imports directly.
 """
 
 import json
@@ -11,12 +11,14 @@ import os
 import time
 
 import requests
+
+import config
 import run_tracker
 
 logger = logging.getLogger("sre-agent-webhook")
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL = os.getenv("LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+MODEL = config.llm_model()
 
 _JSON_CONTRACT = """Respond with raw JSON only - no markdown, no explanation outside the JSON:
 {
@@ -46,12 +48,12 @@ def _incidents_section(incidents) -> str:
         "Past incidents are historical hints - the current bug may differ. "
         "Verify against the code shown.\n"
     ]
-    for inc in incidents:
-        files = ", ".join(inc.get("files_fixed", []))
+    for incident in incidents:
+        files = ", ".join(incident.get("files_fixed", []))
         parts.append(
-            f"\n### {inc.get('error_class', 'incident')} - fixed {files}\n"
-            f"Diagnosis: {inc.get('diagnosis', '')}\n"
-            f"```diff\n{inc.get('fix_diff', '')}\n```\n"
+            f"\n### {incident.get('error_class', 'incident')} - fixed {files}\n"
+            f"Diagnosis: {incident.get('diagnosis', '')}\n"
+            f"```diff\n{incident.get('fix_diff', '')}\n```\n"
         )
     return "".join(parts)
 
@@ -67,9 +69,10 @@ def _build_prompt(test_logs: str, context, incidents=None) -> str:
     )
 
     if isinstance(context, dict):
-        files_section = ""
-        for filename, content in context.items():
-            files_section += f"\n### {filename}\n```\n{content}\n```\n"
+        files_section = "".join(
+            f"\n### {filename}\n```\n{content}\n```\n"
+            for filename, content in context.items()
+        )
         return f"{header}\n## Source Files\n{files_section}\n{_JSON_CONTRACT}"
 
     overview = "\n".join(f"- {path}: {line}" for path, line in context.overview.items())
@@ -93,7 +96,10 @@ def _build_prompt(test_logs: str, context, incidents=None) -> str:
 
 
 def call_llm(test_logs: str, context, incidents=None) -> dict:
-    """Call the LLM and return a parsed dict with 'diagnosis' and 'fixes'."""
+    """Diagnose one failure in a single call.
+
+    Returns the parsed reply, which carries 'diagnosis' and 'fixes'.
+    """
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is not set in .env")
 

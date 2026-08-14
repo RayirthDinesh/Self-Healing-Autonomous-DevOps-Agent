@@ -18,9 +18,11 @@ def _fake_run(script):
 
 
 def test_push_failure_never_carries_the_token(monkeypatch, tmp_path):
-    # git puts the whole remote URL in its rejection message
-    rejected = (0, "", f"error: failed to push to https://x-access-token:{TOKEN}@github.com/o/r.git\n"
-                       "hint: Updates were rejected because the remote contains work")
+    # git puts the whole remote URL in its rejection message.
+    rejected = (0, "",
+                f"error: failed to push to "
+                f"https://x-access-token:{TOKEN}@github.com/o/r.git\n"
+                "hint: Updates were rejected because the remote contains work")
     monkeypatch.setattr(subprocess, "run", _fake_run({"push": (1, *rejected[1:])}))
 
     with pytest.raises(RuntimeError) as excinfo:

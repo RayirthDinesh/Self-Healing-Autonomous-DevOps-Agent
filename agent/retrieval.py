@@ -1,9 +1,10 @@
 """Error-triggered context retrieval.
 
-Given a failing CI log and the repo map, select which files the LLM sees:
-  FULL       - files implicated by the traceback (highest precision signal)
-  SIGNATURES - 1-hop import-graph neighbors + BM25 runners-up
-  OVERVIEW   - one line per remaining file, so the model knows the terrain
+Given a failing CI log and the repo map, decide which files the model sees:
+
+    FULL        files implicated by the traceback, the highest-precision signal
+    SIGNATURES  one-hop import-graph neighbours plus the BM25 runners-up
+    OVERVIEW    one line per remaining file, so the model knows the terrain
 """
 
 import logging
@@ -26,7 +27,11 @@ logger = logging.getLogger("sre-agent-webhook")
 _DEFAULT_FULL_MAX = 5
 _DEFAULT_SIG_MAX = 15
 
-# Path-bearing patterns seen in pytest/python/node failure output
+# Failing test files are shown in full so the model can see which assertions
+# have to pass. Capped to keep the context budget reasonable.
+_TEST_FULL_MAX = 2
+
+# Path-bearing patterns seen in pytest, python and node failure output.
 _PATH_PATTERNS = [
     re.compile(r'File "([^"]+)", line \d+'),
     re.compile(r"(?:^|\s)([\w./\\-]+\.(?:py|js|jsx|ts|tsx)):\d+", re.MULTILINE),
@@ -46,12 +51,16 @@ _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 @dataclass
 class FailureHits:
+    """What a CI log points at: repo-relative paths and the failure class."""
+
     files: set = field(default_factory=set)
     install_failure: bool = False
 
 
 @dataclass
 class TieredContext:
+    """The three tiers of file context handed to the model, plus its metrics."""
+
     full: dict            # path -> full file content
     signatures: dict      # path -> signature lines
     overview: dict        # path -> one-line summary
@@ -93,9 +102,9 @@ def _estimate_tokens(text_parts) -> int:
 
 def select_context(test_logs: str, repo_map: dict, clone_path: str,
                    blame: dict = None) -> TieredContext:
-    """Assemble the tiered LLM context for one failure.
+    """Assemble the tiered model context for one failure.
 
-    blame - optional {path: weight in [0,1]} prior from memory: files that
+    blame is an optional {path: weight in [0,1]} prior from memory. Files that
     historically fixed this error class rank higher.
     """
     started = time.monotonic()
@@ -107,7 +116,8 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
 
     hits = parse_failure_log(test_logs)
 
-    # Seeds: implicated source files; hits on test files pull in what they import
+    # Seeds are the implicated source files. A hit on a test file pulls in
+    # whatever that test imports instead.
     seeds = set()
     for path in hits.files:
         if path not in files:
@@ -119,11 +129,12 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
     if hits.install_failure and "requirements.txt" in files:
         seeds.add("requirements.txt")
 
-    # BM25 over all source files: error text vs path+symbols+docs+content
+    # BM25 over every source file: error text against path, symbols, docs, body.
     contents = {}
     for path in source_files:
         try:
-            with open(os.path.join(clone_path, path), encoding="utf-8", errors="replace") as f:
+            with open(os.path.join(clone_path, path),
+                      encoding="utf-8", errors="replace") as f:
                 contents[path] = f.read()
         except OSError:
             contents[path] = ""
@@ -140,22 +151,23 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
     bm25_raw = dict(zip(corpus_paths, BM25Okapi(corpus).get_scores(query))) if corpus else {}
     rank = repo_map.get("rank", {})
 
-    # Normalise BM25 to [0,1] so it can be combined with cosine similarity
+    # Normalised to [0,1] so BM25 can be combined with cosine similarity.
     bm25_max = max(bm25_raw.values(), default=1.0) or 1.0
     scores = {p: v / bm25_max for p, v in bm25_raw.items()}
 
-    # Chunk-level semantic scores - embed each function separately, take best per file
+    # Chunk-level semantic scores: embed each function separately and keep the
+    # best-scoring chunk per file.
     if _EMBEDDINGS_AVAILABLE:
         try:
             file_chunks = _chunks_for_repo(contents, repo_map["files"])
             sem = _chunk_scores(test_logs[-2000:], file_chunks)
         except Exception as e:
-            logger.warning("Semantic scoring failed (%s) - using BM25 only", e)
+            logger.warning("Semantic scoring failed (%s), using BM25 only", e)
             sem = {}
     else:
         sem = {}
 
-    # Blame prior (learned from merged auto-fix PRs) joins as a third signal
+    # The blame prior, learned from merged auto-fix PRs, is the third signal.
     blame = blame or {}
     blame_weight = 0.2 if blame else 0.0
     sem_weight = (1.0 - blame_weight) / 2 if sem else 0.0
@@ -174,37 +186,35 @@ def select_context(test_logs: str, repo_map: dict, clone_path: str,
 
     full_paths = order(seeds)[:full_max]
 
-    # 1-hop neighbors over the import graph (both directions), minus full tier
+    # One-hop neighbours over the import graph, both directions.
     neighbors = set()
     for src, dst in repo_map["edges"]:
         if src in full_paths and dst in source_files:
             neighbors.add(dst)
         if dst in full_paths and src in source_files:
             neighbors.add(src)
-    # BM25 runners-up join the signature tier
-    neighbors.update(p for p in order(source_files)[: sig_max] if p not in full_paths)
+    # The BM25 runners-up join them in the signature tier.
+    neighbors.update(p for p in order(source_files)[:sig_max] if p not in full_paths)
     neighbors -= set(full_paths)
     sig_paths = order(neighbors)[:sig_max]
 
     full = {p: contents.get(p, "") for p in full_paths}
 
-    # Include the actual failing test files so the LLM sees what assertions need to pass.
-    # Capped at 2 files to keep context budget reasonable.
-    _TEST_FULL_MAX = 2
-    test_file_hits = [
-        p for p in hits.files
-        if p in files and files[p]["is_test"]
-    ][:_TEST_FULL_MAX]
+    test_file_hits = [p for p in hits.files
+                      if p in files and files[p]["is_test"]][:_TEST_FULL_MAX]
     for path in test_file_hits:
         try:
-            with open(os.path.join(clone_path, path), encoding="utf-8", errors="replace") as f:
+            with open(os.path.join(clone_path, path),
+                      encoding="utf-8", errors="replace") as f:
                 full[path] = f.read()
         except OSError:
             pass
     if test_file_hits:
-        logger.info("Added %d failing test file(s) to full context: %s", len(test_file_hits), test_file_hits)
+        logger.info("Added %d failing test file(s) to full context: %s",
+                    len(test_file_hits), test_file_hits)
 
-    signatures = {p: _signature_block(source_files[p]) for p in sig_paths if source_files[p]["symbols"]}
+    signatures = {p: _signature_block(source_files[p])
+                  for p in sig_paths if source_files[p]["symbols"]}
     overview = {
         p: _overview_line(e)
         for p, e in source_files.items()

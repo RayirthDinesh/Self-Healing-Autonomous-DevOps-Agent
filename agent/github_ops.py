@@ -1,4 +1,4 @@
-"""GitHub API operations - opens a pull request for the auto-fix branch."""
+"""GitHub API operations: opening a pull request for the auto-fix branch."""
 
 import logging
 
@@ -7,8 +7,9 @@ import requests
 logger = logging.getLogger("sre-agent-webhook")
 
 
-def create_pull_request(token: str, repo: str, head: str, base: str, title: str, body: str) -> str:
-    """Open a PR on GitHub and return the PR URL."""
+def create_pull_request(token: str, repo: str, head: str, base: str,
+                        title: str, body: str) -> str:
+    """Open a pull request on GitHub and return its URL."""
     response = requests.post(
         f"https://api.github.com/repos/{repo}/pulls",
         headers={

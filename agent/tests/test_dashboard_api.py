@@ -117,7 +117,7 @@ def test_dashboard_secret_is_preferred_over_the_webhook_secret(client, seeded, m
     assert client.get(f"/api/runs?key={SECRET}").status_code == 401
 
 
-# ── local mode: clone the repo, run it, no secret ────────────────────────────
+# --- local mode: clone the repo, run it, no secret ---
 
 @pytest.fixture
 def local_env(tmp_path, monkeypatch):

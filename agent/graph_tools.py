@@ -1,9 +1,9 @@
 """Tool belt for the localizer agent, bound to one cloned workdir.
 
-Deliberately model-agnostic: the localizer speaks a JSON tool protocol instead
-of a provider function-calling API, so any OpenRouter model can drive these.
-Tests and agent internals stay invisible: a failing assertion must not be
-'fixed' by editing the assertion.
+Deliberately model-agnostic. The localizer speaks a JSON tool protocol rather
+than a provider's function-calling API, so any OpenRouter model can drive
+these. Tests and agent internals stay invisible, because a failing assertion
+must not be "fixed" by editing the assertion.
 """
 
 import os
@@ -15,6 +15,7 @@ _SEARCH_MAX_HITS = 20
 
 
 def _visible(path: str, repo_map: dict) -> bool:
+    """True when the path is a source file the agent is allowed to touch."""
     entry = repo_map["files"].get(path)
     if entry is None or entry.get("is_test"):
         return False
@@ -38,7 +39,8 @@ def make_tools(workdir: str, repo_map: dict) -> dict:
         hits = []
         for path in _source_paths():
             try:
-                with open(os.path.join(workdir, path), encoding="utf-8", errors="replace") as f:
+                with open(os.path.join(workdir, path),
+                          encoding="utf-8", errors="replace") as f:
                     for lineno, line in enumerate(f, 1):
                         if pattern.search(line):
                             hits.append(f"{path}:{lineno}: {line.strip()[:160]}")
