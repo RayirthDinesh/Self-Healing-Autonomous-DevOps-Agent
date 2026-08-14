@@ -46,6 +46,18 @@ jobs:
         # test is exercised locally and by real runs.
         run: pytest agent/tests -v --deselect agent/tests/test_run_tests_isolation.py
 
+      - name: Doctor runs on a bare checkout
+        # No secrets here, so doctor must report the missing key rather than
+        # crash - a preflight tool that dies on an unconfigured machine is
+        # useless exactly when it is needed. --offline keeps it hermetic;
+        # exit 1 is the expected verdict, so only a crash fails this step.
+        run: |
+          python agent/doctor.py --offline && status=0 || status=$?
+          if [ "$status" -gt 1 ]; then
+            echo "doctor crashed (exit $status) instead of reporting a verdict"
+            exit 1
+          fi
+
   docker:
     # The quickstart is "docker compose up", so a broken Dockerfile breaks the
     # first thing anyone tries. Contributors on Windows or macOS often cannot

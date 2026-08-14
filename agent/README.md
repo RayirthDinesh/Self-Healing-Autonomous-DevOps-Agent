@@ -346,7 +346,32 @@ console as access to the source of whatever repo the agent watches.
 
 ---
 
-## 6. Troubleshooting
+## 6. Checking the setup before blaming the agent
+
+```bash
+python agent/doctor.py                            # this machine
+python agent/doctor.py --repo owner/name          # and a target repo
+python agent/doctor.py --offline                  # skip every network call
+```
+
+Every prerequisite it checks is one that otherwise stays invisible until a run
+is already going, where the symptom misleads: a dead model slug looks like
+three bad fixes, a stopped Docker daemon looks like a red suite, and a token
+missing a scope looks like a fix that worked and then published nothing.
+
+The model check deliberately makes a real completion without capping
+`max_tokens`, because OpenRouter checks affordability against the reservation
+rather than actual usage - a smaller probe would pass on an account that
+cannot afford a real call.
+
+With `--repo` it also confirms the repo is reachable with your token, that
+`requirements.txt` sits at its root, and that `PR_BASE_BRANCH` matches the
+repo's actual default branch.
+
+Exit status is 0 when nothing failed (warnings are fine) and 1 otherwise, so
+it can gate a deploy.
+
+## 7. Troubleshooting
 
 | Symptom | Cause |
 |---|---|

@@ -50,6 +50,17 @@ cp agent/.env.example agent/.env     # fill in OPENROUTER_API_KEY and WEBHOOK_SE
 docker compose up --build            # webhook on :8000
 ```
 
+Check the machine before expecting a run to work:
+
+```bash
+python agent/doctor.py                       # or --repo owner/name
+```
+
+It verifies Python, dependencies, the Docker daemon, the model your key can
+actually call, token scopes and the run database — and prints what to do about
+anything it finds. Exit status is non-zero on a blocking problem, so it can
+gate a deploy.
+
 Then drive a complete run against a canned real CI failure — no repo of your
 own to break first, no CI to wait for:
 
