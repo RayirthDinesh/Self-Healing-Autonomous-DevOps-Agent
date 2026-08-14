@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in the agent behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report security vulnerabilities here - see
+        [SECURITY.md](../blob/main/SECURITY.md) for private reporting.
+
+        Server logs and dashboard rows contain repo diffs, CI logs and full
+        model prompts. Redact anything you would not publish, and never paste
+        a token.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        Steps. If it involves a specific CI failure, the payload that triggered
+        it is the most useful thing you can attach - see
+        `scripts/capture-payload.sh`.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+        From the server terminal, or `journalctl -u sre-agent`. Redact first.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit SHA or release tag.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker Compose
+        - virtualenv, locally
+        - VM (systemd)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and architecture, Python version, Docker version, and the model you set.
+      placeholder: |
+        OS: Ubuntu 24.04 arm64
+        Python: 3.11.9
+        Docker: 27.1.1
+        LLM_MODEL: poolside/laguna-s-2.1:free
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Docker is installed and the daemon is running
+        - label: I checked the troubleshooting table in `agent/README.md`

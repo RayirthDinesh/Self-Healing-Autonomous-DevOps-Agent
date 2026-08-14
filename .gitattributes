@@ -1,0 +1,20 @@
+# Normalise line endings so a checkout on Windows does not produce files that
+# break on Linux.
+* text=auto eol=lf
+
+# These are executed by a shell or copied into a container. A CRLF checkout
+# makes bash fail with "\r: command not found" and breaks the Docker build,
+# so they must stay LF even on Windows.
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+
+# Keep the sample payload byte-identical: it is real captured CI output and
+# the agent reasons over it verbatim.
+examples/*.json -text
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.db  binary

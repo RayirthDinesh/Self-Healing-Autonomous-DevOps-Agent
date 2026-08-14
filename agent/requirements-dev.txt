@@ -1,0 +1,9 @@
+# Development extras. Install alongside the runtime deps:
+#     pip install -r requirements.txt -r requirements-dev.txt
+#
+# flake8 is not here - it is a runtime dependency, because the agent runs it
+# over candidate fixes before spending a Docker run on them.
+
+-r requirements.txt
+
+pytest==9.1.1

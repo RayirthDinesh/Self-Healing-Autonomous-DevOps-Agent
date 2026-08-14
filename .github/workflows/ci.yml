@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is what the validator container runs, so it is the version that
+        # must stay green. 3.12 catches deprecations before they land.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: agent/requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r agent/requirements-dev.txt
+
+      - name: Lint
+        # The agent runs flake8 over candidate fixes before spending a Docker
+        # run on them, so it has to hold to the same bar. Syntax errors and
+        # undefined names only - style is not enforced.
+        run: flake8 agent --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Run tests
+        # Docker is available on ubuntu-latest, but pulling the validator image
+        # and running a full nested suite is slow and flaky in CI. That one
+        # test is exercised locally and by real runs.
+        run: pytest agent/tests -v --deselect agent/tests/test_run_tests_isolation.py
+
+  docker:
+    # The quickstart is "docker compose up", so a broken Dockerfile breaks the
+    # first thing anyone tries. Contributors on Windows or macOS often cannot
+    # build it locally, which is exactly why this belongs in CI.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Validate the compose file
+        run: docker compose config --quiet
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: sre-agent:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check the runtime has what the agent shells out to
+        # The agent calls git and docker as subprocesses rather than through
+        # libraries, so a missing binary only surfaces mid-run, after a webhook
+        # has already been accepted.
+        run: |
+          docker run --rm sre-agent:ci git --version
+          docker run --rm sre-agent:ci docker --version
+          docker run --rm sre-agent:ci python -c "import fastapi, langgraph; print('imports ok')"
+
+      - name: Check the server actually starts
+        # Catches an import-time crash, which a build alone cannot: the image
+        # builds fine and then dies on first boot.
+        run: |
+          docker run -d --name probe -p 8000:8000 \
+            -e WEBHOOK_SECRET=ci-probe -e OPENROUTER_API_KEY=ci-probe sre-agent:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health; then echo; echo "health ok"; exit 0; fi
+            sleep 2
+          done
+          echo "server did not answer /health in 60s"; docker logs probe; exit 1
+
+      - name: Server logs on failure
+        if: failure()
+        run: docker logs probe || true

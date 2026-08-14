@@ -3,14 +3,33 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+env/
 *.egg-info/
 .claude/
+
+# Secrets. *.key is a backstop, not a control - keep private keys outside the
+# working tree entirely.
 .env
+.env.*
+!.env.example
 agent/.env
 *.key
+*.pem
 
 # local run artifacts and scratch clones
 logs/
 sre-demo-app/
 demo-repos/
+bugsinpy-bugs/
 sre-agent-free.agent*.json
+payload.json
+*.db
+*.db-wal
+*.db-shm
+
+# editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
