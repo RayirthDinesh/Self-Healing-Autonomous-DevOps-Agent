@@ -57,6 +57,13 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Seed agent/.env
+        # agent/.env holds secrets and is gitignored, so a fresh checkout does
+        # not have one and `env_file` makes compose hard-fail. Copying the
+        # example is also the check that the example itself still parses -
+        # it is the file the quickstart tells people to copy.
+        run: cp agent/.env.example agent/.env
+
       - name: Validate the compose file
         run: docker compose config --quiet
 
