@@ -4,6 +4,10 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
+**Demo Video:**
+
+https://github.com/user-attachments/assets/d9284008-cb65-4aee-ad9f-5933ab5d381f
+
 An autonomous agent that watches a repo's CI. When a build or test run fails,
 GitHub Actions POSTs the logs to this agent's webhook server; the agent clones
 the failing branch, retrieves the most relevant source files using hybrid RAG,
